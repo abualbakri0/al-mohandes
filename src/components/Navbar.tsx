@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { CalendarDays, BookOpen, ClipboardList, Bell, Users, GraduationCap, Menu, X, LogOut, User as UserIcon, FileText, Shield, Settings, BookMarked, MessageSquare, Sun, Moon, UserCog, Sparkles, Download } from 'lucide-react';
+import { CalendarDays, BookOpen, ClipboardList, Bell, Users, GraduationCap, Menu, X, LogOut, User as UserIcon, FileText, Shield, Settings, BookMarked, MessageSquare, Sun, Moon, UserCog, Sparkles } from 'lucide-react';
 
-export type TabId = 'schedule' | 'assignments' | 'study' | 'exams' | 'notifications' | 'references' | 'feedback' | 'download' | 'registrations' | 'settings' | 'userSettings' | 'about';
+export type TabId = 'schedule' | 'assignments' | 'study' | 'exams' | 'notifications' | 'references' | 'feedback' | 'registrations' | 'settings' | 'userSettings' | 'about';
 
 const APP_NAME = 'المهندس';
 
@@ -20,7 +20,6 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'notifications', label: 'الإشعارات', icon: Bell },
   { id: 'references', label: 'المراجع', icon: BookMarked },
   { id: 'feedback', label: 'تواصل', icon: MessageSquare },
-  { id: 'download', label: 'تحميل التطبيق', icon: Download },
   { id: 'userSettings', label: 'إعداداتي', icon: UserCog },
   { id: 'about', label: 'عن المطور', icon: Sparkles },
   { id: 'registrations', label: 'المسجلون', icon: Users, devOnly: true },

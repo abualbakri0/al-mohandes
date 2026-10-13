@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">المهندس</string>
+    <string name="title_activity_main">المهندس</string>
+    <string name="package_name">com.almohanndes.app</string>
+    <string name="custom_url_scheme">com.almohanndes.app</string>
+</resources>

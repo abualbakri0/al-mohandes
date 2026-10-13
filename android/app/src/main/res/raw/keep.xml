@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tells the resource shrinker (shrinkResources) to KEEP the small notification
+     icon. It is referenced at runtime by name via capacitor.config.ts
+     (smallIcon: 'ic_stat_notify'), so AAPT cannot see the reference and would
+     otherwise strip it from release builds. This res/raw location is the one
+     documented by Android for tools:keep. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_notify" />

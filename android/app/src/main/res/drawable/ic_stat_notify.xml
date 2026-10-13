@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Graduation cap (app icon) as the notification status-bar silhouette.
+         White on transparent; Android tints it with iconColor (#0D9488). -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,3L1,9l11,6l9,-4.91V17h2V9L12,3zM5,13.18v3.36C5,18.83 8.13,21 12,21s7,-2.17 7,-4.46v-3.36l-7,3.89L5,13.18z" />
+</vector>
+

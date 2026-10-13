@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { isolateTime } from '@/lib/time';
 
 const ARABIC_DAYS = [
   'الأحد',
@@ -49,7 +50,9 @@ export function useToday(): TodayInfo {
   const minutes = now.getMinutes();
   const period = hours < 12 ? 'صباحاً' : 'مساءً';
   const displayHours = hours % 12 === 0 ? 12 : hours % 12;
-  const timeLabel = `${displayHours}:${String(minutes).padStart(2, '0')} ${period}`;
+  // نعزل الوقت اتجاهياً (LRI…PDI) حتى يبقى الرقم ملتصقاً بكلمته (صباحاً/مساءً)
+  // ولا ينقلب داخل الصفحة العربية، بدلاً من الاعتماد على dir="ltr" في الواجهة.
+  const timeLabel = isolateTime(`${displayHours}:${String(minutes).padStart(2, '0')} ${period}`);
 
   return { dayName, dateLabel, timeLabel };
 }

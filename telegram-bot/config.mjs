@@ -9,6 +9,8 @@
 // المتغيّرات الاختيارية:
 //   APP_NAME    اسم التطبيق المعروض (افتراضي: المهندس)
 //   DOWNLOAD_URL رابط تنزيل خارجي بديل (إن وُجد)
+//   BOT_DESCRIPTION       نص وصف البوت (يظهر في صفحة المحادثة)
+//   BOT_SHORT_DESCRIPTION النص المختصر (يظهر في نتائج البحث)
 
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -75,12 +77,23 @@ const adminIds = adminRaw
   .map((s) => Number(s))
   .filter((n) => !Number.isNaN(n));
 
+// وصف البوت الافتراضي (يظهر أسفل اسم البوت في صفحة المحادثة)
+const DEFAULT_DESCRIPTION =
+  'تطبيق المهندس - البوابة الأكاديمية والتقنية لطلاب هندسة الميكاترونكس والهندسة الكهربائية\n\n' +
+  '📌 المطور: أبوبكر الحيدري (أبو شنب)';
+
+// الوصف المختصر (يظهر في نتائج البحث عن البوت — حد أقصى 120 حرفاً)
+const DEFAULT_SHORT_DESCRIPTION =
+  'تطبيق المهندس - البوابة الأكاديمية والتقنية لطلاب هندسة الميكاترونكس والهندسة الكهربائية';
+
 export const config = {
   botToken: token,
   adminIds,
   appName: env('APP_NAME', 'المهندس'),
   downloadUrl: env('DOWNLOAD_URL', ''),
   iosUrl: env('IOS_URL', ''),
+  description: env('BOT_DESCRIPTION', DEFAULT_DESCRIPTION),
+  shortDescription: env('BOT_SHORT_DESCRIPTION', DEFAULT_SHORT_DESCRIPTION),
   // مسارات الملفات المحلية
   dataDir: join(__dirname, 'data'),
   releasesDir: join(__dirname, 'releases'),

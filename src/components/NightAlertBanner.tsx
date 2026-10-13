@@ -60,7 +60,7 @@ export default function NightAlertBanner({ alert, userName, onClose }: Props) {
                   <div key={i} className="flex items-center gap-2 bg-white/10 rounded-lg px-3 py-2">
                     <CalendarDays className="w-4 h-4 text-teal-300 flex-shrink-0" />
                     <span className="font-medium">{lec.subject}</span>
-                    <span className="text-white/60 text-xs mr-auto" dir="ltr">{formatTimeRange(lec.start_time, lec.end_time)}</span>
+                    <span className="text-white/60 text-xs mr-auto">{formatTimeRange(lec.start_time, lec.end_time)}</span>
                   </div>
                 ))}
               </div>

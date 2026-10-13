@@ -9,7 +9,6 @@ import RegistrationsView from '@/components/RegistrationsView';
 import SettingsView from '@/components/SettingsView';
 import ReferencesView from '@/components/ReferencesView';
 import FeedbackView from '@/components/FeedbackView';
-import DownloadAppView from '@/components/DownloadAppView';
 import RegistrationGate from '@/components/RegistrationGate';
 import UserSettingsView from '@/components/UserSettingsView';
 import AboutDeveloperView from '@/components/AboutDeveloperView';
@@ -393,7 +392,7 @@ function App() {
                     <CalendarWeekIcon className="w-3.5 h-3.5" />
                     {today.dateLabel}
                   </span>
-                  <span className="flex items-center gap-1 text-teal-50 text-xs font-medium tabular-nums" dir="ltr">
+                  <span className="flex items-center gap-1 text-teal-50 text-xs font-medium tabular-nums">
                     <ClockIcon className="w-3.5 h-3.5" />
                     {today.timeLabel}
                   </span>
@@ -436,7 +435,6 @@ function App() {
         {activeTab === 'notifications' && <NotificationsView key={refreshKey} isDeveloper={isDeveloper} department={userDepartment ?? undefined} />}
         {activeTab === 'references' && <ReferencesView key={refreshKey} isDeveloper={isDeveloper} department={userDepartment ?? undefined} />}
         {activeTab === 'feedback' && <FeedbackView key={refreshKey} isDeveloper={isDeveloper} userName={user.name} userPhone={user.phone} />}
-        {activeTab === 'download' && <DownloadAppView key={refreshKey} />}
         {activeTab === 'userSettings' && <UserSettingsView key={refreshKey} user={user} />}
         {activeTab === 'about' && <AboutDeveloperView key={refreshKey} />}
         {activeTab === 'registrations' && isDeveloper && <RegistrationsView key={refreshKey} isDeveloper={isDeveloper} />}

@@ -350,7 +350,7 @@ export default function ExamsView({ isDeveloper, department }: Props) {
                 <div className="flex items-center gap-4 mt-3 text-sm text-slate-500 flex-wrap">
                   <span className="flex items-center gap-1">
                     <Clock className="w-4 h-4" />
-                    <span dir="ltr">{formatTimeRange(exam.start_time, exam.end_time)}</span>
+                    <span>{formatTimeRange(exam.start_time, exam.end_time)}</span>
                   </span>
                   {exam.location && (
                     <span className="flex items-center gap-1">

@@ -1,0 +1,8 @@
+# لا نُضمّن الأسرار أو البيانات المحلية أو النُسخ داخل الحاوية
+.env
+data/
+releases/
+node_modules/
+npm-debug.log
+Dockerfile
+.dockerignore

@@ -104,6 +104,23 @@ export async function answerCallbackQuery(id, text) {
   }
 }
 
+// ------------- وصف البوت (Bot API 6.4+) -------------
+// الوصف الكامل: يظهر في صفحة المحادثة أسفل اسم البوت (حد أقصى 512 حرفاً)
+export async function setMyDescription(description, languageCode) {
+  return call('setMyDescription', {
+    description,
+    ...(languageCode ? { language_code: languageCode } : {}),
+  });
+}
+
+// الوصف المختصر: يظهر في نتائج البحث عن البوت (حد أقصى 120 حرفاً)
+export async function setMyShortDescription(shortDescription, languageCode) {
+  return call('setMyShortDescription', {
+    short_description: shortDescription,
+    ...(languageCode ? { language_code: languageCode } : {}),
+  });
+}
+
 // تنزيل ملف من Telegram إلى المسار المحلي (لاستقبال APK من الأدمن)
 export async function downloadFile(fileId, destPath) {
   const file = await call('getFile', { file_id: fileId });
