@@ -92,10 +92,16 @@ const WELCOME = `أهلاً بك يا بشمهندس 🎓
 
 اختر من القائمة أدناه لنبدأ:`;
 
-const HELP = `تطبيق المهندس
+const HELP = `📖 <b>أوامر البوت</b>
 
-رقم الإصدار: v1.0.0
-تاريخ النشر: 2026-10-13`;
+/start — القائمة الرئيسية (تظهر الأزرار الثابتة)
+/help — قائمة الأوامر
+/download — تنزيل أحدث نسخة (أو زر ⬇️ تنزيل التطبيق بالأسفل)
+/version — عرض الإصدار الحالي وسجل التغييرات
+/subscribe — تفعيل إشعارات التحديث
+/unsubscribe — إيقاف إشعارات التحديث
+
+💬 لأي استفسار تواصل مع فريق ${APP}.`;
 
 // ----------------- لوحة المفاتيح الثابتة -----------------
 // ReplyKeyboardMarkup: تظهر بشكل دائم أسفل حقل الكتابة (تحت خانة الكتابة)
@@ -111,7 +117,7 @@ const BTN = {
   HOME: '🏠 القائمة الرئيسية',
 };
 
-// اللوحة الرئيسية الثابتة — تظهر بشكل دائم أسفل حقل الكتابة
+// اللوحة الرئيسية الثابتة — تُرسل مع كل رسالة للمستخدم لتبقى ظاهرة دائماً
 function mainMenuKeyboard() {
   return {
     keyboard: [
@@ -121,11 +127,12 @@ function mainMenuKeyboard() {
     ],
     resize_keyboard: true,
     is_persistent: true,
-    input_field_placeholder: 'اختر من القائمة أدناه 👇',
+    input_field_placeholder: 'اختر العملية المطلوبة 👇',
   };
 }
 
-// شاشة اختيار نظام التشغيل (أزرار Inline داخل المحادثة)
+// شاشة اختيار نظام التشغيل: تبقى Inline لأنها خطوة فرعية داخل المحادثة
+// (روابط URL يجب أن تبقى Inline حصراً حسب قيود تيليجرام).
 function osMenuKeyboard() {
   return {
     inline_keyboard: [
@@ -152,26 +159,111 @@ async function cmdHelp(chatId) {
 }
 
 async function cmdVersion(chatId) {
+  const meta = loadMeta();
+  if (!meta.versionName) {
+    await sendMessage(
+      chatId,
+      `ℹ️ لا توجد نسخة منشورة بعد.\nاستخدم زر ⬇️ تنزيل التطبيق بالأسفل 👇`,
+      { reply_markup: mainMenuKeyboard() }
+    );
+    return;
+  }
+  const size = meta.apkFile ? safeSize(join(config.releasesDir, meta.apkFile)) : meta.size;
+  const changelog = meta.changelog ? `\n\n📝 <b>سجل التغييرات:</b>\n${escapeHtml(meta.changelog)}` : '';
+  const external = config.downloadUrl ? `\n\n🔗 <a href="${config.downloadUrl}">رابط تنزيل بديل</a>` : '';
   await sendMessage(
     chatId,
-    `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`,
+    `📦 <b>إصدار ${APP}</b>\n\n` +
+      `• الإصدار: <b>${escapeHtml(String(meta.versionName))}</b>\n` +
+      (meta.versionCode ? `• رقم البناء: <code>${meta.versionCode}</code>\n` : '') +
+      `• تاريخ النشر: ${fmtDate(meta.updatedAt)}\n` +
+      `• الحجم: ${fmtSize(size)}` +
+      changelog +
+      external +
+      `\n\nاختر ⬇️ تنزيل التطبيق من الأزرار بالأسفل 👇`,
     { reply_markup: mainMenuKeyboard() }
   );
 }
 
-// إرسال تطبيق أندرويد (APK) للمستخدم — عرض البيانات الأساسية فقط
+// إرسال تطبيق أندرويد (APK) للمستخدم
 async function deliverAndroid(chatId) {
+  const meta = loadMeta();
+  await sendChatAction(chatId, 'upload_document');
+
+  const apkPath = meta.apkFile ? join(config.releasesDir, meta.apkFile) : null;
+  const size = apkPath ? safeSize(apkPath) : null;
+
+  // حد أقصى آمن لإرسال الملف عبر البوت (يمكن تجاوزه على الشبكات السريعة/السيرفرات).
+  // إذا كان الملف أكبر أو لم يكن متاحاً، نستخدم الرابط الاحتياطي.
+  const MAX_FILE_SEND = 8 * 1024 * 1024; // 8MB
+  const canSendFile = apkPath && existsSync(apkPath) && size != null && size <= MAX_FILE_SEND;
+
+  // 1) إرسال الملف مباشرةً إن كان الحجم مناسباً
+  if (canSendFile) {
+    const caption =
+      `📦 <b>${APP}</b> ${meta.versionName ? 'v' + escapeHtml(String(meta.versionName)) : ''}\n` +
+      `الحجم: ${fmtSize(size)}\n` +
+      (meta.versionCode ? `رقم البناء: <code>${meta.versionCode}</code>` : '');
+    try {
+      await sendDocument(chatId, apkPath, caption);
+      return;
+    } catch (e) {
+      console.error('فشل إرسال APK، سيتم اللجوء للرابط:', e.message);
+      // نتابع للرابط الاحتياطي بالأسفل
+    }
+  }
+
+  // 2) بديل: رابط خارجي لأندرويد (يُفضّل للملفات الكبيرة أو عند فشل الإرسال)
+  if (config.downloadUrl) {
+    const kb = {
+      reply_markup: {
+        inline_keyboard: [[{ text: '⬇️ تنزيل التطبيق', url: config.downloadUrl }]],
+      },
+    };
+    await sendMessage(
+      chatId,
+      `📥 <b>تنزيل تطبيق ${APP} (أندرويد)</b>` +
+        (meta.versionName ? ` — الإصدار ${escapeHtml(String(meta.versionName))}` : '') +
+        `\n\nاضغط الزر بالأسفل لتنزيل أحدث نسخة 👇`,
+      kb
+    );
+    return;
+  }
+
+  // 3) لا ملف ولا رابط
   await sendMessage(
     chatId,
-    `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`
+    `😕 لا توجد نسخة أندرويد متاحة للتنزيل حالياً.\nيرجى المحاولة لاحقاً.`
   );
 }
 
-// إرسال بيانات التطبيق الأساسية فقط
+// إرسال رابط نسخة الآيفون (موقع Vercel + شرح التثبيت)
 async function deliverIos(chatId) {
+  if (config.iosUrl) {
+    const meta = loadMeta();
+    const ver = meta.versionName ? ` (الإصدار ${escapeHtml(String(meta.versionName))})` : '';
+    const kb = {
+      reply_markup: {
+        inline_keyboard: [[{ text: 'فتح رابط الآيفون في سفاري', url: config.iosUrl }]],
+      },
+    };
+    await sendMessage(
+      chatId,
+      `<b>نسخة الآيفون${ver}</b>\n\n` +
+        `اجهزة آبل <b>لا تدعم ملفات APK</b>، لذلك نستخدم نسخة الويب السريعة على هذا الرابط:\n${config.iosUrl}\n\n` +
+        `<b>طريقة التثبيت (دقيقة واحدة):</b>\n` +
+        `1 — افتح الرابط من متصفح <b>Safari</b> على الآيفون (وليس من داخل تيليجرام).\n` +
+        `2 — اضغط زر <b>المشاركة</b> (مربع بسهم للاعلى) اسفل المتصفح.\n` +
+        `3 — اختر <b>اضافة الى الشاشة الرئيسية / Add to Home Screen</b> ثم اضغط <b>اضافة</b>.\n` +
+        `4 — ستجد ايقونة المهندس بجانب تطبيقاتك وتعمل كتطبيق حقيقي.\n\n` +
+        `اضغط الزر بالاسفل للفتح المباشر.`,
+      kb
+    );
+    return;
+  }
   await sendMessage(
     chatId,
-    `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`
+    `😕 رابط نسخة الآيفون غير متاح حالياً.\nسيتم إضافته قريباً — تابعنا للتفاصيل.`
   );
 }
 
@@ -189,14 +281,14 @@ async function cmdSubscribe(chatId, from) {
   addSubscriber(from);
   await sendMessage(
     chatId,
-    `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`,
+    `🔔 تم تفعيل إشعارات التحديث.\nستصلك رسالة عند إطلاق كل نسخة جديدة.\n\nلإيقافها استخدم /unsubscribe`,
     { reply_markup: mainMenuKeyboard() }
   );
 }
 
 async function cmdUnsubscribe(chatId, from) {
   markBlocked(from.id);
-  await sendMessage(chatId, `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`, {
+  await sendMessage(chatId, `🔕 تم إيقاف إشعارات التحديث.\nلإعادة تفعيلها استخدم /subscribe`, {
     reply_markup: mainMenuKeyboard(),
   });
 }
@@ -434,7 +526,7 @@ async function handleMessage(msg) {
       await ADMIN_COMMANDS[cmd](chatId);
       return;
     }
-    await sendMessage(chatId, `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`, {
+    await sendMessage(chatId, `لم أفهم هذا الأمر. اختر من الأزرار بالأسفل 👇`, {
       reply_markup: mainMenuKeyboard(),
     });
     return;
@@ -446,14 +538,19 @@ async function handleMessage(msg) {
     if (handled) return;
   }
 
-  await sendMessage(chatId, `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`, {
+  await sendMessage(chatId, `اختر العملية المطلوبة من الأزرار بالأسفل 👇`, {
     reply_markup: mainMenuKeyboard(),
   });
 }
 
-// رسالة اختيار نظام التشغيل — تعرض البيانات الأساسية فقط
+// رسالة اختيار نظام التشغيل — تُستخدم من أزرار اللوحة الثابتة والأوامر النصية
 async function showOsChoice(chatId, isUpdate = false) {
-  await sendMessage(chatId, `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`, { reply_markup: osMenuKeyboard() });
+  const title = isUpdate
+    ? `🔄 <b>تحديث التطبيق</b>\n\nاختر نظام التشغيل الخاص بجهازك للحصول على أحدث نسخة 👇`
+    : `⬇️ <b>تنزيل التطبيق</b>\n\nاختر نظام التشغيل الخاص بجهازك 👇`;
+  // ملاحظة: هذه الرسالة تحمل أزرار Inline (اختيار النظام)،
+  // بينما تبقى اللوحة الثابتة ظاهرة أسفل حقل الكتابة تلقائياً.
+  await sendMessage(chatId, title, { reply_markup: osMenuKeyboard() });
 }
 
 async function handleCallbackQuery(cq) {
@@ -466,39 +563,45 @@ async function handleCallbackQuery(cq) {
   await answerCallbackQuery(cq.id);
 
   try {
-    const INFO = `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`;
-    // زر "تنزيل" أو "تحديث" → عرض البيانات الأساسية
+    // زر "تنزيل" أو "تحديث" → عرض قائمة اختيار نظام التشغيل
     if (data === 'menu:download' || data === 'menu:update') {
+      const isUpdate = data === 'menu:update';
+      const title = isUpdate
+        ? `🔄 <b>تحديث التطبيق</b>\n\nاختر نظام التشغيل الخاص بجهازك للحصول على أحدث نسخة 👇`
+        : `⬇️ <b>تنزيل التطبيق</b>\n\nاختر نظام التشغيل الخاص بجهازك 👇`;
+      // نحدّث نفس الرسالة لتبقى القائمة نظيفة
       if (messageId) {
-        await editMessageText(chatId, messageId, INFO, {
+        await editMessageText(chatId, messageId, title, {
           reply_markup: osMenuKeyboard(),
         });
       } else {
-        await sendMessage(chatId, INFO, { reply_markup: osMenuKeyboard() });
+        await sendMessage(chatId, title, { reply_markup: osMenuKeyboard() });
       }
       return;
     }
 
-    // زر "رجوع" → العودة للبيانات الأساسية
+    // زر "رجوع" → العودة للقائمة الرئيسية
+    // ملاحظة: لا يمكن إرفاق ReplyKeyboard برسالة معدّلة (editMessageText يقبل Inline فقط)،
+    // لذلك نرسل رسالة جديدة تحمل اللوحة الثابتة.
     if (data === 'menu:back') {
       await sendMessage(chatId, WELCOME, { reply_markup: mainMenuKeyboard() });
       return;
     }
 
-    // اختيار أندرويد → عرض البيانات الأساسية
+    // اختيار أندرويد → إرسال ملف APK
     if (data === 'os:android') {
       await deliverAndroid(chatId);
       return;
     }
 
-    // اختيار آيفون → عرض البيانات الأساسية
+    // اختيار آيفون → إرسال الرابط
     if (data === 'os:ios') {
       await deliverIos(chatId);
       return;
     }
   } catch (e) {
     console.error('خطأ في معالجة الزر:', e.message);
-    await sendMessage(chatId, `تطبيق المهندس\n\nرقم الإصدار: v1.0.0\nتاريخ النشر: 2026-10-13`);
+    await sendMessage(chatId, `⚠️ حدث خطأ أثناء تنفيذ طلبك. حاول مرة أخرى.`);
   }
 }
 
