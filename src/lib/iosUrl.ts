@@ -1,10 +1,10 @@
 // ============================================================
 // رابط نسخة الآيفون (موقع Vercel المستضاف).
-// يُقرأ من متغيّر البيئة VITE_IOS_URL، وإن لم يُضبط نستخدم
-// رابط الموقع الحالي تلقائياً (يعمل على Vercel بدون أي ضبط).
-// لضبط رابط ثابت: أضف في ملف .env الجذري:
-//   VITE_IOS_URL=https://your-app.vercel.app
+// الأولوية: VITE_IOS_URL ← الرابط الثابت الافتراضي ← رابط الموقع الحالي.
+// القيمة الثابتة تضمن ظهور الرابط دائماً حتى لو نُسي ضبط متغير البيئة.
 // ============================================================
+
+export const DEFAULT_IOS_URL = 'https://al-mohandes-app-2026.vercel.app';
 
 export function getIosAppUrl(): string {
   try {
@@ -14,6 +14,7 @@ export function getIosAppUrl(): string {
   } catch {
     /* ignore */
   }
+  if (DEFAULT_IOS_URL) return DEFAULT_IOS_URL;
   try {
     if (typeof window !== 'undefined' && window.location?.origin) {
       return window.location.origin;
