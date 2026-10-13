@@ -85,10 +85,12 @@ function safeSize(p) {
   }
 }
 
-const WELCOME = `تطبيق المهندس
+const WELCOME = `أهلاً بك يا بشمهندس 🎓
 
-رقم الإصدار: v1.0.0
-تاريخ النشر: 2026-10-13`;
+يسعدنا انضمامك إلى تطبيق المهندس
+بوابتك الجامعية الأولى لإدارة جداولك، ومتابعة موادك الدراسية، وتسهيل مسيرتك الأكاديمية بكل سلاسة واحترافية.
+
+اختر من القائمة أدناه لنبدأ:`;
 
 const HELP = `تطبيق المهندس
 
@@ -109,14 +111,31 @@ const BTN = {
   HOME: '🏠 القائمة الرئيسية',
 };
 
-// اللوحة الرئيسية الثابتة — بدون أزرار (عرض البيانات فقط)
+// اللوحة الرئيسية الثابتة — تظهر بشكل دائم أسفل حقل الكتابة
 function mainMenuKeyboard() {
-  return { remove_keyboard: true };
+  return {
+    keyboard: [
+      [{ text: BTN.DOWNLOAD }, { text: BTN.UPDATE }],
+      [{ text: BTN.ANDROID }, { text: BTN.IOS }],
+      [{ text: BTN.VERSION }, { text: BTN.HELP }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: 'اختر من القائمة أدناه 👇',
+  };
 }
 
-// شاشة اختيار نظام التشغيل: بدون أزرار (عرض البيانات فقط)
+// شاشة اختيار نظام التشغيل (أزرار Inline داخل المحادثة)
 function osMenuKeyboard() {
-  return { inline_keyboard: [] };
+  return {
+    inline_keyboard: [
+      [
+        { text: '🤖 أندرويد', callback_data: 'os:android' },
+        { text: '🍎 آيفون', callback_data: 'os:ios' },
+      ],
+      [{ text: '↩️ رجوع', callback_data: 'menu:back' }],
+    ],
+  };
 }
 
 
