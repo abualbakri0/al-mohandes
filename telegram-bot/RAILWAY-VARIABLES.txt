@@ -1,0 +1,22 @@
+# ============================================================
+#  متغيّرات Railway — انسخها في: Service → Variables → + New Variable
+#  (واحدة واحدة، الاسم في اليسار والقيمة في اليمين — بدون علامات تنصيص)
+# ============================================================
+
+# توكن البوت من @BotFather
+BOT_TOKEN=8580339526:AAGO1Pk186YgVDTRnCMYrIHAVD-M1gZpyKU
+
+# معرّفات المشرفين (مفصولة بفاصلة)
+ADMIN_IDS=5555912861
+
+# اسم التطبيق المعروض
+APP_NAME=المهندس
+
+# رابط نسخة الآيفون (موقع Vercel)
+IOS_URL=https://al-mohandes-app-2026.vercel.app
+
+# ---- Supabase (تخزين دائم — يحمي البيانات من مسح قرص Railway) ----
+SUPABASE_URL=https://wulycdwgvpriptzubazi.supabase.co
+# المفتاح الحالي (publishable). إن أردت صلاحية كاملة استخدم مفتاح الخدمة السري
+# من Supabase → Settings → API → service_role (secret) وضعه في SUPABASE_SERVICE_KEY
+SUPABASE_SERVICE_KEY=sb_publishable_JmjBwfWyG6Wjr76ZCwmkEw_ZnrZREGc

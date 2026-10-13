@@ -22,6 +22,7 @@
 
 import { existsSync, statSync, unlinkSync, renameSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { config, isAdmin, assertConfigured } from './config.mjs';
 import {
   addSubscriber,
@@ -49,6 +50,7 @@ import {
   downloadFile,
   editMessageText,
 } from './api.mjs';
+import { init as initDb } from './db.mjs';
 
 assertConfigured();
 
@@ -701,8 +703,32 @@ async function handleCallbackQuery(cq) {
   }
 }
 
+// ----------------- خادم صحة (يبقي الحاوية مستيقظة + للمراقبة) -----------------
+// البوت يعمل بـ long polling (اتصال صادر)، لكن استضافات مثل Railway
+// تُبطّئ/تُسبت الحاوية عند غياب الطلبات الواردة. لذلك نفتح منفذ HTTP بسيط
+// يستمع على PORT (توفره Railway/Render) ويردّ 200 — يُبقي الحاوية مستيقظة
+// ويجعل خدمات المراقبة (UptimeRobot) تتفقّد البوت فعلياً.
+function startHealthServer() {
+  const port = process.env.PORT;
+  if (!port) return; // محلياً لا حاجة له
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('OK — al-mohandes bot is alive');
+  });
+  server.listen(port, () => {
+    console.log(`🌐 خادم الصحة يعمل على المنفذ ${port} (للمراقبة وإبقاء الحاوية مستيقظة).`);
+  });
+  server.on('error', (e) => console.warn('⚠️ تعذّر تشغيل خادم الصحة:', e.message));
+}
+
 // ----------------- حلقة الاستطلاع -----------------
 async function main() {
+  // تحميل بيانات البوت من Supabase (أو الملفات المحلية) قبل أي شيء
+  await initDb();
+
+  // خادم الصحة (على السحابة فقط) — يجب أن يبدأ قبل الاستطلاع
+  startHealthServer();
+
   // تطبيق وصف البوت مرة واحدة فقط (بدون دخول في حلقة الاستطلاع)
   if (process.argv.includes('--set-description')) {
     try {

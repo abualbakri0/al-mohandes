@@ -14,8 +14,12 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.mjs';
 import { loadMeta, saveMeta } from './store.mjs';
+import { init as initDb } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// تحميل بيانات Supabase/المحلية قبل استخدام loadMeta (لزيادة رقم البناء بشكل صحيح)
+await initDb();
 
 // محلّل بسيط لوسائط سطر الأوامر
 function parseArgs(argv) {

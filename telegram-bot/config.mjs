@@ -94,7 +94,15 @@ export const config = {
   iosUrl: env('IOS_URL', ''),
   description: env('BOT_DESCRIPTION', DEFAULT_DESCRIPTION),
   shortDescription: env('BOT_SHORT_DESCRIPTION', DEFAULT_SHORT_DESCRIPTION),
-  // مسارات الملفات المحلية
+  // ---- Supabase (تخزين دائم على السحابة) ----
+  // يُفضّل ضبط SUPABASE_SERVICE_KEY (يتجاوز RLS) في بيئة الاستضافة.
+  // إن لم يوجد، يُستخدم VITE_SUPABASE_ANON_KEY (يحتاج سياسات RLS مناسبة).
+  supabaseUrl: env('SUPABASE_URL', env('VITE_SUPABASE_URL', '')),
+  supabaseKey: env(
+    'SUPABASE_SERVICE_KEY',
+    env('SUPABASE_SECRET_KEY', env('VITE_SUPABASE_ANON_KEY', ''))
+  ),
+  // مسارات الملفات المحلية (fallback / ترحيل أولي)
   dataDir: join(__dirname, 'data'),
   releasesDir: join(__dirname, 'releases'),
   subscribersFile: join(__dirname, 'data', 'subscribers.json'),
