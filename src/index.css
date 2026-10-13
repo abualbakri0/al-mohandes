@@ -1,0 +1,160 @@
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Tajawal', system-ui, sans-serif;
+}
+
+/* ── Android 15+/16 edge-to-edge support ───────────────────────────────
+   التطبيق يستهدف targetSdk 36، وأندرويد يفرض وضع edge-to-edge تلقائياً:
+   يرسم الـ WebView خلف شريط الحالة (الساعة/البطارية) وشريط التنقل.
+   لذلك نحجز هذه المناطق على عناصر الحدود (الهيدر والفوتر والشاشات الكاملة)
+   عبر قيم calc( ... + env(safe-area-inset-*)) حتى لا يختفي المحتوى تحتها،
+   مع الحفاظ على الهوامش الأصلية بدلاً من استبدالها.
+   ملاحظة: نستخدم قيماً إضافية (calc) لا قيماً بديلة، لأن أي كلاس يضبط
+   padding-bottom وحده يتجاوز أدوات Tailwind مثل py-4. */
+
+/* خلفية الشاشة: تمنع ظهور وميض أبيض/أسود خلف الأشرطة الشفافة،
+   وتُطابق خلفية التطبيق في الوضع الفاتح والداكن. */
+html {
+  background-color: #f8fafc;
+}
+
+html.dark {
+  background-color: #020617;
+}
+
+body {
+  font-family: 'Tajawal', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* يمنع التمرير المطاطي الذي يظهر خلف شريط الحالة */
+  overscroll-behavior-y: none;
+}
+
+* {
+  font-family: 'Tajawal', system-ui, sans-serif;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.25s ease-out forwards;
+}
+
+.animate-slide-down {
+  animation: slideDown 0.35s ease-out forwards;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.bolt-badge,
+[class*="bolt-badge"],
+[class*="bolt_badge"],
+a[href*="bolt.new"],
+[href*="bolt.new"],
+img[src*="bolt.new"],
+[alt*="Bolt"],
+[alt*="bolt"],
+[title*="Bolt"],
+[title*="bolt"],
+[class*="bolt"],
+[id*="bolt"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
