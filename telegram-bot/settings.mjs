@@ -1,27 +1,5 @@
-// settings.mjs — إعدادات البوت القابلة للتعديل من لوحة التحكم (تخزين JSON خفيف)
-// ============================================================
-// كل التعديلات من لوحة تحكم المشرف تُحفظ هنا فوراً وتُقرأ مع كل رسالة،
-// أي بدون إعادة نشر الكود أو إعادة تشغيل البوت.
-//
-// البنية:
-// {
-//   appName,            اسم التطبيق المعروض
-//   texts: {...}        النصوص الظاهرة للمستخدمين
-//   links: {...}        الروابط (iOS / تنزيل بديل)
-//   buttons: [...]      تعريفات أزرار اللوحة (نص + إجراء + تفعيل)
-//   description,        وصف البوت الكامل (About)
-//   shortDescription,   الوصف المختصر (البحث)
-//   updatedAt           آخر وقت حفظ
-// }
-//
-// ملاحظة: طبقة التخزين معزولة هنا عمداً — لاستبدالها بـ Supabase لاحقاً
-// يكفي تعديل هذا الملف فقط (نفس الدوال: getSettings / saveSettings).
-
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { config } from './config.mjs';
-
-const settingsFile = join(config.dataDir, 'settings.json');
+import { getRaw, setRaw } from './db.mjs';
 
 // ----------------- القيم الافتراضية -----------------
 export function defaultSettings() {
@@ -75,29 +53,20 @@ export function defaultSettings() {
 // دمج آمن: القيم المخزّنة تُقدَّم على الافتراضية، مع ملء أي حقول ناقصة
 export function getSettings() {
   const d = defaultSettings();
-  try {
-    if (!existsSync(settingsFile)) return d;
-    const raw = JSON.parse(readFileSync(settingsFile, 'utf8'));
-    return {
-      ...d,
-      ...raw,
-      texts: { ...d.texts, ...(raw.texts || {}) },
-      links: { ...d.links, ...(raw.links || {}) },
-      buttons:
-        Array.isArray(raw.buttons) && raw.buttons.length
-          ? raw.buttons
-          : d.buttons,
-    };
-  } catch (e) {
-    console.error('تعذّر قراءة settings.json، تم استخدام القيم الافتراضية:', e.message);
-    return d;
-  }
+  const raw = getRaw('settings'); // من الذاكرة (Supabase/محلي)
+  if (!raw) return d;
+  return {
+    ...d,
+    ...raw,
+    texts: { ...d.texts, ...(raw.texts || {}) },
+    links: { ...d.links, ...(raw.links || {}) },
+    buttons:
+      Array.isArray(raw.buttons) && raw.buttons.length ? raw.buttons : d.buttons,
+  };
 }
 
 export function saveSettings(settings) {
-  const dataDir = config.dataDir;
-  if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
   settings.updatedAt = new Date().toISOString();
-  writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf8');
+  setRaw('settings', settings); // يُحفظ في Supabase (أو محلياً) فوراً
   return settings;
 }

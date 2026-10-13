@@ -1,34 +1,20 @@
-// store.mjs — تخزين المشتركين وبيانات الإصدار (JSON على القرص)
+// store.mjs — تخزين المشتركين وبيانات الإصدار
 // ============================================================
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { config } from './config.mjs';
+// الطبقة الفعلية الآن في db.mjs (Supabase + ذاكرة مؤقتة + بديل محلي).
+// نحافظ هنا على نفس أسماء الدوال المتزامنة التي يستخدمها bot.mjs و panel.mjs.
+//
+// subscribers: { [userId]: { id, first_name, last_name, username, joinedAt, blocked } }
+// meta: { versionName, versionCode, apkFile, changelog, updatedAt, size }
 
-function ensureDir() {
-  if (!existsSync(config.dataDir)) mkdirSync(config.dataDir, { recursive: true });
-}
-
-function readJson(file, fallback) {
-  try {
-    if (existsSync(file)) return JSON.parse(readFileSync(file, 'utf8'));
-  } catch (e) {
-    console.error(`تعذّر قراءة ${file}:`, e.message);
-  }
-  return fallback;
-}
-
-function writeJson(file, data) {
-  ensureDir();
-  writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
-}
+import { getRaw, setRaw } from './db.mjs';
 
 // -------------------- المشتركون --------------------
-// subscribers: { [userId]: { id, first_name, last_name, username, joinedAt, blocked } }
 export function loadSubscribers() {
-  return readJson(config.subscribersFile, {});
+  return getRaw('subscribers') || {};
 }
 
 export function saveSubscribers(subscribers) {
-  writeJson(config.subscribersFile, subscribers);
+  setRaw('subscribers', subscribers);
 }
 
 export function addSubscriber(user) {
@@ -62,7 +48,6 @@ export function activeSubscriberIds() {
 }
 
 // -------------------- بيانات الإصدار --------------------
-// meta: { versionName, versionCode, apkFile, changelog, updatedAt, size }
 const defaultMeta = {
   versionName: null,
   versionCode: null,
@@ -73,10 +58,11 @@ const defaultMeta = {
 };
 
 export function loadMeta() {
-  const meta = { ...defaultMeta, ...readJson(config.metaFile, {}) };
-  return meta;
+  const raw = getRaw('meta');
+  return { ...defaultMeta, ...(raw || {}) };
 }
 
 export function saveMeta(meta) {
-  writeJson(config.metaFile, meta);
+  setRaw('meta', meta);
 }
+
