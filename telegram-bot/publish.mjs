@@ -5,8 +5,8 @@
 //   node telegram-bot/publish.mjs --file app-debug.apk --version 1.2 --changelog "إصلاحات عامة"
 //
 // ما يفعله:
-//   1. ينسخ ملف APK إلى telegram-bot/releases/current.apk
-//   2. يحدّث telegram-bot/data/meta.json (الإصدار/رقم البناء/الحجم/التاريخ)
+//   1. ينسخ ملف APK إلى telegram-bot/releases/المهندس.apk
+//   2. يحدّث telegram-bot/data/meta.json (الإصدار/التاريخ)
 // ثم يستطيع البوت إرسالها عبر /download وإشعار المشتركين عبر /notify
 
 import { existsSync, copyFileSync, unlinkSync, statSync, readFileSync } from 'node:fs';
@@ -71,7 +71,6 @@ if (!version) {
   const m = srcPath.match(/(\d+\.\d+(?:\.\d+)?)/);
   version = m ? m[1] : oldMeta.versionName || '1.0';
 }
-let versionCode = args.code ? Number(args.code) : (oldMeta.versionCode || 0) + 1;
 let changelog = args.changelog !== undefined ? args.changelog : (oldMeta.changelog || '');
 
 // إن مُرِّر changelog كملف
@@ -80,7 +79,7 @@ if (args.changelogFile) {
   if (existsSync(cf)) changelog = readFileSync(cf, 'utf8').trim();
 }
 
-const targetPath = join(config.releasesDir, 'current.apk');
+const targetPath = join(config.releasesDir, 'المهندس.apk');
 
 // استبدال آمن: انسخ لملف مؤقت ثم احذف القديم ثم سمِّ الجديد
 const tmp = join(config.releasesDir, `publish-${Date.now()}.apk`);
@@ -92,8 +91,7 @@ unlinkSync(tmp);
 
 const meta = {
   versionName: version,
-  versionCode,
-  apkFile: 'current.apk',
+  apkFile: 'المهندس.apk',
   changelog,
   updatedAt: new Date().toISOString(),
   size,
@@ -102,7 +100,5 @@ saveMeta(meta);
 
 console.log('\n✅ تم نشر النسخة:');
 console.log(`   الإصدار:     ${meta.versionName}`);
-console.log(`   رقم البناء:  ${meta.versionCode}`);
-console.log(`   الحجم:       ${fmtSize(size)}`);
 console.log(`   الملف:       ${targetPath}`);
 console.log(`\n   شغّل البوت ثم أرسل /notify لإشعار المشتركين بالتحديث.\n`);

@@ -173,14 +173,11 @@ async function cmdVersion(chatId) {
   const external = config.downloadUrl ? `\n\n🔗 <a href="${config.downloadUrl}">رابط تنزيل بديل</a>` : '';
   await sendMessage(
     chatId,
-    `📦 <b>إصدار ${APP}</b>\n\n` +
+    `تطبيق المهندس\n\n` +
       `• الإصدار: <b>${escapeHtml(String(meta.versionName))}</b>\n` +
-      (meta.versionCode ? `• رقم البناء: <code>${meta.versionCode}</code>\n` : '') +
-      `• تاريخ النشر: ${fmtDate(meta.updatedAt)}\n` +
-      `• الحجم: ${fmtSize(size)}` +
+      `• تاريخ النشر: ${fmtDate(meta.updatedAt)}` +
       changelog +
-      external +
-      `\n\nاختر ⬇️ تنزيل التطبيق من الأزرار بالأسفل 👇`,
+      external,
     { reply_markup: mainMenuKeyboard() }
   );
 }
@@ -200,12 +197,9 @@ async function deliverAndroid(chatId) {
 
   // 1) إرسال الملف مباشرةً إن كان الحجم مناسباً
   if (canSendFile) {
-    const caption =
-      `📦 <b>${APP}</b> ${meta.versionName ? 'v' + escapeHtml(String(meta.versionName)) : ''}\n` +
-      `الحجم: ${fmtSize(size)}\n` +
-      (meta.versionCode ? `رقم البناء: <code>${meta.versionCode}</code>` : '');
+    const caption = `تطبيق المهندس\n\nالإصدار: ${meta.versionName ? 'v' + escapeHtml(String(meta.versionName)) : ''}`;
     try {
-      await sendDocument(chatId, apkPath, caption);
+      await sendDocument(chatId, apkPath, caption, 'المهندس.apk');
       return;
     } catch (e) {
       console.error('فشل إرسال APK، سيتم اللجوء للرابط:', e.message);
@@ -377,9 +371,9 @@ async function handleDocument(msg) {
   }
 
   await sendChatAction(chatId, 'upload_document');
-  await sendMessage(chatId, `⏳ جاري تنزيل الملف (${fmtSize(doc.file_size)}) وحفظه كنسخة حالية...`);
+  await sendMessage(chatId, `⏳ جاري حفظ النسخة الجديدة...`);
 
-  const targetName = 'current.apk';
+  const targetName = 'المهندس.apk';
   const targetPath = join(config.releasesDir, targetName);
   const tmpPath = join(config.releasesDir, `upload-${Date.now()}.apk`);
 
@@ -404,11 +398,9 @@ async function handleDocument(msg) {
 
     await sendMessage(
       chatId,
-      `✅ <b>تم نشر النسخة الجديدة!</b>\n\n` +
+      `تطبيق المهندس\n\n` +
         `• الإصدار: <b>${escapeHtml(String(meta.versionName))}</b>\n` +
-        `• رقم البناء: <code>${meta.versionCode}</code>\n` +
-        `• الحجم: ${fmtSize(meta.size)}\n\n` +
-        `استخدم /setchangelog لتحديث سجل التغييرات، و /notify لإشعار المشتركين.`
+        `• تاريخ النشر: ${fmtDate(meta.updatedAt)}`
     );
   } catch (e) {
     if (existsSync(tmpPath)) {

@@ -22,15 +22,15 @@ async function call(method, params) {
   return data.result;
 }
 
-// رفع ملف (multipart) — لإرسال APK
-export async function sendDocument(chatId, filePath, caption) {
+// رفع ملف (multipart) — لإرسال APK (fileName اختياري لتخصيص اسم الملف الظاهر للمستخدم)
+export async function sendDocument(chatId, filePath, caption, fileName) {
   const { readFileSync } = await import('node:fs');
   const buffer = readFileSync(filePath);
   const form = new FormData();
   form.append('chat_id', String(chatId));
   if (caption) form.append('caption', caption);
-  // اسم مقروء للملف
-  const name = filePath.split(/[\\/]/).pop() || 'app.apk';
+  // اسم مقروء للملف (يُستخدم fileName المخصص إن وُجد، وإلا اسم الملف الأصلي)
+  const name = fileName || filePath.split(/[\\/]/).pop() || 'app.apk';
   form.append('document', new Blob([buffer]), name);
 
   // مهلة زمنية سخيّة حسب حجم الملف (حد أدنى 60 ثانية) لتجنّب التعليق اللانهائي
