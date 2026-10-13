@@ -25,6 +25,17 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+// أسماء الأيام مرتبة حسب Date#getDay() (0 = الأحد ... 6 = السبت)، وهي نفس
+// أسماء DAYS في supabase.ts لكن بترتيب تقويمي يطابق getDay مباشرة.
+const WEEKDAY_BY_INDEX = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+/** اسم اليوم بالعربية لتاريخ بصيغة YYYY-MM-DD (يُقرأ كتاريخ محلي دون انزياح UTC). */
+function formatWeekday(dateStr: string): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return '';
+  return WEEKDAY_BY_INDEX[d.getDay()];
+}
+
 /** Local YYYY-MM-DD (no UTC shift). */
 function toLocalYMD(d: Date): string {
   const y = d.getFullYear();
@@ -296,12 +307,16 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
   const completedCount = assignments.filter((a) => isDone(a)).length;
   const progressPct = assignments.length > 0 ? Math.round((completedCount / assignments.length) * 100) : 0;
 
-  // Stable order by due date only. Completing a task must NOT move it: we used
-  // to push completed rows to the end, which made the list jump under the
-  // user's finger. `assignments` already arrives due-date ordered from the API.
-  const sorted = [...assignments].sort(
-    (a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
-  );
+  // ترتيب تلقائي: غير المكتمل في الأعلى والمكتمل ينزل للأسفل مباشرة عند الضغط
+  // على "صح"، وداخل كل مجموعة يُحفظ الترتيب حسب تاريخ التسليم (الأقرب أولاً).
+  // الملاحظة: البطاقات لها key = assignment.id، فينقل React العقدة نفسها دون
+  // إعادة تشغيل الحركة (animate-slide-in)، فلا يوجد وميض عند إعادة الترتيب.
+  const sorted = [...assignments].sort((a, b) => {
+    const aDone = isDone(a) ? 1 : 0;
+    const bDone = isDone(b) ? 1 : 0;
+    if (aDone !== bDone) return aDone - bDone;
+    return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+  });
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -539,10 +554,20 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
                       <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
                         <Calendar className="w-4 h-4" />
                         الطلب: {formatDate(assignment.request_date)}
+                        {assignment.request_date && (
+                          <span className="text-teal-600 dark:text-teal-400 font-medium">
+                            ({formatWeekday(assignment.request_date)})
+                          </span>
+                        )}
                       </span>
                       <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
                         <Calendar className="w-4 h-4" />
                         التسليم: {formatDate(assignment.due_date)}
+                        {assignment.due_date && (
+                          <span className="text-teal-600 dark:text-teal-400 font-medium">
+                            ({formatWeekday(assignment.due_date)})
+                          </span>
+                        )}
                       </span>
                       {!done && (
                         <span

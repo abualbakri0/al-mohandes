@@ -6,24 +6,40 @@
 //   • /start, /help          — ترحيب وقائمة الأوامر
 //   • /download, /apk        — إرسال أحدث نسخة APK + رابط بديل
 //   • /version               — عرض الإصدار الحالي وسجل التغييرات
+//   • /about                 — بطاقة تعريف المطور
 //   • /subscribe /unsubscribe— إدارة الاشتراك في إشعارات التحديث
 //   • (أدمن) رفع ملف APK للبوت → يُحفظ ويصبح النسخة الحالية تلقائياً
-//   • (أدمن) /setchangelog    — تعديل سجل التغييرات
-//   • (أدمن) /broadcast       — إرسال رسالة لكل المشتركين
-//   • (أدمن) /notify          — إشعار بوجود تحديث جديد
-//   • (أدمن) /stats           — إحصاءات المشتركين
+//   • (أدمن) /panel          — لوحة التحكم الكاملة (نصوص/أزرار/روابط/إصدارات)
+//   • (أدمن) /setchangelog   — تعديل نص التحديث
+//   • (أدمن) /setdescription — تطبيق وصف البوت (About)
+//   • (أدمن) /broadcast      — إرسال رسالة لكل المشتركين
+//   • (أدمن) /notify         — إشعار بوجود تحديث جديد
+//   • (أدمن) /stats          — إحصاءات المشتركين
+//   • جميع النصوص والأزرار والروابط تُقرأ من data/settings.json ديناميكياً
+//     (تُعدَّل من /panel بدون إعادة تشغيل أو إعادة نشر)
+//   • ضبط وصف البوت تلقائياً عند كل تشغيل (يمكن تطبيقه مرة واحدة عبر:
+//     node telegram-bot/bot.mjs --set-description)
 
-import { existsSync, statSync, unlinkSync, renameSync } from 'node:fs';
+import { existsSync, statSync, unlinkSync, renameSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config, isAdmin, assertConfigured } from './config.mjs';
 import {
   addSubscriber,
   markBlocked,
-  activeSubscriberIds,
   loadSubscribers,
   loadMeta,
   saveMeta,
 } from './store.mjs';
+import { getSettings } from './settings.mjs';
+import { getState, setState, clearState } from './state.mjs';
+import {
+  openPanel,
+  handlePanelCallback,
+  handlePanelInput,
+  applyBotDescription,
+  broadcast,
+  PANEL_BTN,
+} from './panel.mjs';
 import {
   sendMessage,
   sendDocument,
@@ -36,11 +52,20 @@ import {
 
 assertConfigured();
 
-const APP = config.appName;
+// اسم التطبيق ديناميكي (من الإعدادات — قابل للتعديل من لوحة التحكم)
+function APP() {
+  return getSettings().appName || config.appName;
+}
 
-// --------- حالة مؤقتة للأدمن (بانتظار سجل تغييرات أو بث) ----------
-// Map<chatId, { mode: 'changelog' | 'broadcast' }>
-const adminState = new Map();
+// نصوص ديناميكية (تُقرأ مع كل رسالة من data/settings.json)
+function T(key) {
+  const s = getSettings();
+  return String(s.texts[key] || '').split('{app}').join(s.appName || config.appName);
+}
+
+
+// --------- حالة مؤقتة للأدمن ----------
+// مُنقلة إلى state.mjs (مشتركة مع panel.mjs) — انظر getState/setState/clearState.
 
 function fmtSize(bytes) {
   if (!bytes && bytes !== 0) return '—';
@@ -85,45 +110,70 @@ function safeSize(p) {
   }
 }
 
-const WELCOME = `أهلاً بك يا بشمهندس 🎓
+// النصوص الثابتة القديمة (WELCOME/HELP) استُبدلت بـ T('welcome') / T('help')
+// التي تُقرأ ديناميكياً من data/settings.json (تُدار من /panel).
 
-يسعدنا انضمامك إلى تطبيق المهندس
-بوابتك الجامعية الأولى لإدارة جداولك، ومتابعة موادك الدراسية، وتسهيل مسيرتك الأكاديمية بكل سلاسة واحترافية.
-
-اختر من القائمة أدناه لنبدأ:`;
-
-const HELP = `💬 <b>تواصل معنا</b>
-
-لأي استفسار أو دعم فني تواصل عبر المعرف:
-@rbkke`;
-
-// ----------------- لوحة المفاتيح الثابتة -----------------
-// ReplyKeyboardMarkup: تظهر بشكل دائم أسفل حقل الكتابة (تحت خانة الكتابة)
-// بدلاً من InlineKeyboardMarkup المؤقتة داخل المحادثة.
-// للأوامر الرئيسية: تنزيل التطبيق / تحديث التطبيق + أوامر مساعدة.
-const BTN = {
-  DOWNLOAD: '⬇️ تنزيل التطبيق',
-  UPDATE: '🔄 تحديث التطبيق',
-  ANDROID: '🤖 أندرويد',
-  IOS: '🍎 آيفون',
-  VERSION: '📦 الإصدار الحالي',
-  HELP: '💬 تواصل',
-  HOME: '🏠 القائمة الرئيسية',
-};
-
-// اللوحة الرئيسية الثابتة — تُرسل مع كل رسالة للمستخدم لتبقى ظاهرة دائماً
-function mainMenuKeyboard() {
+// ----------------- لوحة المفاتيح الثابتة (ديناميكية من الإعدادات) -----------------
+// ReplyKeyboardMarkup: تظهر بشكل دائم أسفل حقل الكتابة.
+// الأزرار تُقرأ من data/settings.json (تُدار من لوحة التحكم /panel).
+// زر اللوحة «🛠️ لوحة التحكم» يظهر للمشرف فقط (عبر ADMIN_IDS).
+function mainMenuKeyboard(chatId) {
+  const s = getSettings();
+  const rows = [];
+  let row = [];
+  for (const b of s.buttons) {
+    if (!b.enabled) continue;
+    row.push({ text: b.label });
+    if (row.length === 2) {
+      rows.push(row);
+      row = [];
+    }
+  }
+  if (row.length) rows.push(row);
+  // صف المشرف: زر لوحة التحكم (غير مرئي لبقية المستخدمين)
+  if (chatId !== undefined && chatId !== null && isAdmin(chatId)) {
+    rows.push([{ text: PANEL_BTN }]);
+  }
   return {
-    keyboard: [
-      [{ text: BTN.DOWNLOAD }, { text: BTN.UPDATE }],
-      [{ text: BTN.ANDROID }, { text: BTN.IOS }],
-      [{ text: BTN.VERSION }, { text: BTN.HELP }],
-    ],
+    keyboard: rows,
     resize_keyboard: true,
     is_persistent: true,
     input_field_placeholder: 'اختر العملية المطلوبة 👇',
   };
 }
+
+// إجراء زر — يُنفَّذ حسب حقل action في الإعدادات
+async function runButtonAction(btn, chatId, from) {
+  switch (btn.action) {
+    case 'download':
+      return showOsChoice(chatId, false);
+    case 'update':
+      return showOsChoice(chatId, true);
+    case 'android':
+      return deliverAndroid(chatId);
+    case 'ios':
+      return deliverIos(chatId);
+    case 'about':
+      return cmdAbout(chatId);
+    case 'help':
+      return cmdHelp(chatId);
+    case 'home':
+      return cmdStart(chatId, from);
+    case 'version':
+      return cmdVersion(chatId);
+    case 'url':
+      return sendMessage(chatId, `🔗 اضغط لفتح الرابط:`, {
+        reply_markup: {
+          inline_keyboard: [[{ text: btn.label, url: btn.url || 'https://example.com' }]],
+        },
+      });
+    default:
+      return sendMessage(chatId, `اختر العملية المطلوبة من الأزرار بالأسفل 👇`, {
+        reply_markup: mainMenuKeyboard(chatId),
+      });
+  }
+}
+
 
 // شاشة اختيار نظام التشغيل: تبقى Inline لأنها خطوة فرعية داخل المحادثة
 // (روابط URL يجب أن تبقى Inline حصراً حسب قيود تيليجرام).
@@ -143,42 +193,49 @@ function osMenuKeyboard() {
 // ----------------- أوامر المستخدمين -----------------
 async function cmdStart(chatId, from) {
   addSubscriber(from); // أي شخص يبدأ المحادثة يُسجَّل كمشترك تلقائياً
-  await sendMessage(chatId, WELCOME, {
-    reply_markup: mainMenuKeyboard(),
+  await sendMessage(chatId, T('welcome'), {
+    reply_markup: mainMenuKeyboard(chatId),
   });
 }
 
 async function cmdHelp(chatId) {
-  await sendMessage(chatId, HELP, { reply_markup: mainMenuKeyboard() });
+  await sendMessage(chatId, T('help'), { reply_markup: mainMenuKeyboard(chatId) });
 }
 
 async function cmdVersion(chatId) {
   const meta = loadMeta();
+  const s = getSettings();
   if (!meta.versionName) {
-    await sendMessage(
-      chatId,
-      `ℹ️ لا توجد نسخة منشورة بعد.\nاستخدم زر ⬇️ تنزيل التطبيق بالأسفل 👇`,
-      { reply_markup: mainMenuKeyboard() }
-    );
+    await sendMessage(chatId, T('noVersion'), {
+      reply_markup: mainMenuKeyboard(chatId),
+    });
     return;
   }
   const size = meta.apkFile ? safeSize(join(config.releasesDir, meta.apkFile)) : meta.size;
-  const changelog = meta.changelog ? `\n\n📝 <b>سجل التغييرات:</b>\n${escapeHtml(meta.changelog)}` : '';
-  const external = config.downloadUrl ? `\n\n🔗 <a href="${config.downloadUrl}">رابط تنزيل بديل</a>` : '';
+  const changelog = meta.changelog ? `\n\n${escapeHtml(meta.changelog)}` : '';
+  const external = s.links.downloadUrl
+    ? `\n\n🔗 <a href="${s.links.downloadUrl}">رابط تنزيل بديل</a>`
+    : '';
   await sendMessage(
     chatId,
-    `تطبيق المهندس\n\n` +
+    `${escapeHtml(s.appName || config.appName)}\n\n` +
       `• الإصدار: <b>${escapeHtml(String(meta.versionName))}</b>\n` +
       `• تاريخ النشر: ${fmtDate(meta.updatedAt)}` +
       changelog +
       external,
-    { reply_markup: mainMenuKeyboard() }
+    { reply_markup: mainMenuKeyboard(chatId) }
   );
+}
+
+// زر «عن المطور» — بطاقة تعريفية بالمطوّر (نص ديناميكي من الإعدادات)
+async function cmdAbout(chatId) {
+  await sendMessage(chatId, T('about'), { reply_markup: mainMenuKeyboard(chatId) });
 }
 
 // إرسال تطبيق أندرويد (APK) للمستخدم
 async function deliverAndroid(chatId) {
   const meta = loadMeta();
+  const s = getSettings();
   await sendChatAction(chatId, 'upload_document');
 
   const apkPath = meta.apkFile ? join(config.releasesDir, meta.apkFile) : null;
@@ -191,7 +248,7 @@ async function deliverAndroid(chatId) {
 
   // 1) إرسال الملف مباشرةً إن كان الحجم مناسباً
   if (canSendFile) {
-    const caption = `تطبيق المهندس\n\nالإصدار: ${meta.versionName ? 'v' + escapeHtml(String(meta.versionName)) : ''}`;
+    const caption = `${s.appName || config.appName}\n\nالإصدار: ${meta.versionName ? 'v' + escapeHtml(String(meta.versionName)) : ''}`;
     try {
       await sendDocument(chatId, apkPath, caption, 'المهندس.apk');
       return;
@@ -202,15 +259,15 @@ async function deliverAndroid(chatId) {
   }
 
   // 2) بديل: رابط خارجي لأندرويد (يُفضّل للملفات الكبيرة أو عند فشل الإرسال)
-  if (config.downloadUrl) {
+  if (s.links.downloadUrl) {
     const kb = {
       reply_markup: {
-        inline_keyboard: [[{ text: '⬇️ تنزيل التطبيق', url: config.downloadUrl }]],
+        inline_keyboard: [[{ text: '⬇️ تنزيل التطبيق', url: s.links.downloadUrl }]],
       },
     };
     await sendMessage(
       chatId,
-      `📥 <b>تنزيل تطبيق ${APP} (أندرويد)</b>` +
+      `📥 <b>تنزيل تطبيق ${escapeHtml(s.appName || config.appName)} (أندرويد)</b>` +
         (meta.versionName ? ` — الإصدار ${escapeHtml(String(meta.versionName))}` : '') +
         `\n\nاضغط الزر بالأسفل لتنزيل أحدث نسخة 👇`,
       kb
@@ -219,26 +276,24 @@ async function deliverAndroid(chatId) {
   }
 
   // 3) لا ملف ولا رابط
-  await sendMessage(
-    chatId,
-    `😕 لا توجد نسخة أندرويد متاحة للتنزيل حالياً.\nيرجى المحاولة لاحقاً.`
-  );
+  await sendMessage(chatId, T('androidUnavailable'));
 }
 
 // إرسال رابط نسخة الآيفون (موقع Vercel + شرح التثبيت)
 async function deliverIos(chatId) {
-  if (config.iosUrl) {
+  const s = getSettings();
+  if (s.links.iosUrl) {
     const meta = loadMeta();
     const ver = meta.versionName ? ` (الإصدار ${escapeHtml(String(meta.versionName))})` : '';
     const kb = {
       reply_markup: {
-        inline_keyboard: [[{ text: 'فتح رابط الآيفون في سفاري', url: config.iosUrl }]],
+        inline_keyboard: [[{ text: 'فتح رابط الآيفون في سفاري', url: s.links.iosUrl }]],
       },
     };
     await sendMessage(
       chatId,
       `<b>نسخة الآيفون${ver}</b>\n\n` +
-        `اجهزة آبل <b>لا تدعم ملفات APK</b>، لذلك نستخدم نسخة الويب السريعة على هذا الرابط:\n${config.iosUrl}\n\n` +
+        `اجهزة آبل <b>لا تدعم ملفات APK</b>، لذلك نستخدم نسخة الويب السريعة على هذا الرابط:\n${s.links.iosUrl}\n\n` +
         `<b>طريقة التثبيت (دقيقة واحدة):</b>\n` +
         `1 — افتح الرابط من متصفح <b>Safari</b> على الآيفون (وليس من داخل تيليجرام).\n` +
         `2 — اضغط زر <b>المشاركة</b> (مربع بسهم للاعلى) اسفل المتصفح.\n` +
@@ -249,10 +304,7 @@ async function deliverIos(chatId) {
     );
     return;
   }
-  await sendMessage(
-    chatId,
-    `😕 رابط نسخة الآيفون غير متاح حالياً.\nسيتم إضافته قريباً — تابعنا للتفاصيل.`
-  );
+  await sendMessage(chatId, T('iosUnavailable'));
 }
 
 // الأمر النصي /download يفتح قائمة اختيار النظام
@@ -270,14 +322,14 @@ async function cmdSubscribe(chatId, from) {
   await sendMessage(
     chatId,
     `🔔 تم تفعيل إشعارات التحديث.\nستصلك رسالة عند إطلاق كل نسخة جديدة.\n\nلإيقافها استخدم /unsubscribe`,
-    { reply_markup: mainMenuKeyboard() }
+    { reply_markup: mainMenuKeyboard(chatId) }
   );
 }
 
 async function cmdUnsubscribe(chatId, from) {
   markBlocked(from.id);
   await sendMessage(chatId, `🔕 تم إيقاف إشعارات التحديث.\nلإعادة تفعيلها استخدم /subscribe`, {
-    reply_markup: mainMenuKeyboard(),
+    reply_markup: mainMenuKeyboard(chatId),
   });
 }
 
@@ -296,17 +348,33 @@ async function cmdStats(chatId) {
 
 async function cmdSetChangelog(chatId) {
   const meta = loadMeta();
-  adminState.set(chatId, { mode: 'changelog' });
+  setState(chatId, { mode: 'changelog', back: 'app' });
   await sendMessage(
     chatId,
-    `✏️ أرسل الآن نص <b>سجل التغييرات</b> الجديد.\n` +
+    `✏️ أرسل الآن النص الجديد.\n` +
       `النص الحالي:\n<code>${escapeHtml(meta.changelog || '(فارغ)')}</code>\n\n` +
       `أرسل /cancel للإلغاء.`
   );
 }
 
+// (أدمن) تطبيق وصف البوت الرسمي — يظهر في صفحة محادثة البوت وفي البحث
+async function cmdSetDescription(chatId) {
+  try {
+    await applyBotDescription();
+    const s = getSettings();
+    await sendMessage(
+      chatId,
+      `✅ تم تطبيق وصف البوت:\n\n` +
+        `<b>${escapeHtml(s.description)}</b>\n\n` +
+        `• الوصف المختصر:\n<code>${escapeHtml(s.shortDescription)}</code>`
+    );
+  } catch (e) {
+    await sendMessage(chatId, `⚠️ فشل تطبيق الوصف: ${escapeHtml(e.message)}`);
+  }
+}
+
 async function cmdBroadcast(chatId) {
-  adminState.set(chatId, { mode: 'broadcast' });
+  setState(chatId, { mode: 'broadcast', back: 'main' });
   await sendMessage(
     chatId,
     `📣 أرسل الآن <b>نص الرسالة</b> التي تريد بثّها لكل المشتركين.\nأرسل /cancel للإلغاء.`
@@ -320,7 +388,7 @@ async function cmdNotify(chatId) {
     return;
   }
   const text =
-    `🚀 <b>تحديث جديد متاح لـ ${APP}!</b>\n\n` +
+    `🚀 <b>تحديث جديد متاح لـ ${escapeHtml(APP())}!</b>\n\n` +
     `الإصدار: <b>${escapeHtml(String(meta.versionName))}</b>\n` +
     (meta.changelog ? `\n${escapeHtml(meta.changelog)}\n` : '') +
     `\nللتنزيل أرسل /download`;
@@ -329,23 +397,7 @@ async function cmdNotify(chatId) {
   await sendMessage(chatId, `✅ تم الإرسال.\n• نجح: <b>${sent}</b>\n• فشل: <b>${failed}</b>`);
 }
 
-async function broadcast(text) {
-  const ids = activeSubscriberIds();
-  let sent = 0;
-  let failed = 0;
-  for (const id of ids) {
-    try {
-      await sendMessage(id, text);
-      sent++;
-      // throttle بسيط لتجنّب حدود تيليجرام (~25 رسالة/ثانية)
-      if (sent % 20 === 0) await sleep(1100);
-    } catch {
-      markBlocked(id);
-      failed++;
-    }
-  }
-  return { sent, failed };
-}
+// broadcast() مُستوردة الآن من panel.mjs (نسخة واحدة مشتركة)
 
 // ----------------- معالجة APK المرفوع من الأدمن -----------------
 async function handleDocument(msg) {
@@ -384,17 +436,36 @@ async function handleDocument(msg) {
       updatedAt: new Date().toISOString(),
       size: info.size,
     };
+    // استبدال آمن متوافق مع OneDrive: انسخ ثم احذف القديم ثم احذف المؤقت
+    // (renameSync قد يفشل بين وحدات/مجلدات OneDrive المتزامنة)
     if (existsSync(targetPath)) unlinkSync(targetPath);
-    renameSync(tmpPath, targetPath);
+    copyFileSync(tmpPath, targetPath);
+    try { unlinkSync(tmpPath); } catch { /* تجاهل */ }
 
     saveMeta(meta);
-    adminState.delete(chatId);
+    clearState(chatId);
+
+    // أزرار متابعة: إضافة نص التحديث ثم إشعار المشتركين
+    const kb = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📝 إضافة نص التحديث', callback_data: 'upl:chlog' }],
+          [{ text: '🚀 إشعار كل المشتركين', callback_data: 'upl:notify' }],
+        ],
+      },
+    };
 
     await sendMessage(
       chatId,
-      `تطبيق المهندس\n\n` +
+      `✅ <b>تم اعتماد النسخة الجديدة بنجاح!</b>\n\n` +
+        `${escapeHtml(getSettings().appName || config.appName)}\n` +
         `• الإصدار: <b>${escapeHtml(String(meta.versionName))}</b>\n` +
-        `• تاريخ النشر: ${fmtDate(meta.updatedAt)}`
+        `• تاريخ النشر: ${fmtDate(meta.updatedAt)}\n\n` +
+        `أصبحت هذه هي النسخة الحالية التي يستلمها المستخدمون عند التنزيل.\n\n` +
+        `<b>الخطوة التالية (اختياري):</b>\n` +
+        `• ✏️ أضف <b>نص التحديث</b> (ما الجديد في هذه النسخة).\n` +
+        `• 📣 ثم أرسل <b>إشعاراً لكل المشتركين</b> بضغطة زر.`,
+      kb
     );
   } catch (e) {
     if (existsSync(tmpPath)) {
@@ -406,29 +477,31 @@ async function handleDocument(msg) {
 
 
 // ----------------- الحالة المؤقتة (إدخال نص من الأدمن) -----------------
+// تُنادى لكل نص يرسله الأدمن عند وجود حالة محفوظة.
+// أنماط panel.* تُسلَّم لـ handlePanelInput (لوحة التحكم)،
+// وأنماط changelog/broadcast تُعالج هنا ثم تُغلق الحالة.
 async function handleAdminText(msg) {
   const chatId = msg.chat.id;
-  const state = adminState.get(chatId);
+  const state = getState(chatId);
   if (!state) return false;
 
   const text = msg.text || '';
   if (text === '/cancel') {
-    adminState.delete(chatId);
+    clearState(chatId);
     await sendMessage(chatId, `✖️ تم الإلغاء.`);
     return true;
   }
 
-  if (state.mode === 'changelog') {
-    const meta = loadMeta();
-    meta.changelog = text;
-    saveMeta(meta);
-    adminState.delete(chatId);
-    await sendMessage(chatId, `✅ تم تحديث سجل التغييرات.`);
-    return true;
+  // أنشطة لوحة التحكم (نصوص/أزرار/روابط/إصدارات/وصف/بث…)
+  if (String(state.mode).startsWith('panel.') || state.mode === 'changelog') {
+    const handled = await handlePanelInput(msg, state);
+    if (handled) return true;
+    return false;
   }
 
+  // الإذاعة الكلاسيكية (أمر /broadcast)
   if (state.mode === 'broadcast') {
-    adminState.delete(chatId);
+    clearState(chatId);
     await sendMessage(chatId, `⏳ جاري بث الرسالة...`);
     const { sent, failed } = await broadcast(text);
     await sendMessage(chatId, `✅ تم البث.\n• نجح: <b>${sent}</b>\n• فشل: <b>${failed}</b>`);
@@ -445,13 +518,17 @@ const USER_COMMANDS = {
   '/download': (chatId) => cmdDownload(chatId),
   '/apk': (chatId) => cmdDownload(chatId),
   '/version': (chatId) => cmdVersion(chatId),
+  '/about': (chatId) => cmdAbout(chatId),
   '/subscribe': (chatId, from) => cmdSubscribe(chatId, from),
   '/unsubscribe': (chatId, from) => cmdUnsubscribe(chatId, from),
 };
 
 const ADMIN_COMMANDS = {
+  '/panel': (chatId) => openPanel(chatId),
+  '/admin': (chatId) => openPanel(chatId),
   '/stats': (chatId) => cmdStats(chatId),
   '/setchangelog': (chatId) => cmdSetChangelog(chatId),
+  '/setdescription': (chatId) => cmdSetDescription(chatId),
   '/broadcast': (chatId) => cmdBroadcast(chatId),
   '/notify': (chatId) => cmdNotify(chatId),
 };
@@ -469,34 +546,32 @@ async function handleMessage(msg) {
   const text = (msg.text || '').trim();
   if (!text) return;
 
+  // --- 0) أثناء وجود حالة إدخال للمشرف (لوحة تحكم/نص تحديث/بث) ---
+  // نمنح الإدخال الأولوية، مع السماح بـ /cancel لإغلاق الوضع.
+  if (isAdmin(from.id) && getState(chatId)) {
+    if (text === '/cancel') {
+      clearState(chatId);
+      await sendMessage(chatId, `✖️ تم الإلغاء.`);
+      return;
+    }
+    if (text.startsWith('/')) {
+      await sendMessage(chatId, `⏳ أنت في وضع الإدخال حالياً.\nأرسل النص المطلوب أو /cancel للإلغاء.`);
+      return;
+    }
+    const handled = await handleAdminText(msg);
+    if (handled) return;
+  }
+
   // --- 1) أزرار لوحة المفاتيح الثابتة (ReplyKeyboardMarkup) ---
-  // تيليجرام يرسل نص الزر كرسالة نصية عادية، لذلك نطابقه هنا.
-  if (text === BTN.DOWNLOAD) {
-    await showOsChoice(chatId, false);
+  // تيليجرام يرسل نص الزر كرسالة نصية عادية، لذلك نطابقه بنصوص
+  // الإعدادات ديناميكياً (قابلة للتعديل/الحذف/الإضافة من /panel).
+  if (text === PANEL_BTN && isAdmin(from.id)) {
+    await openPanel(chatId);
     return;
   }
-  if (text === BTN.UPDATE) {
-    await showOsChoice(chatId, true);
-    return;
-  }
-  if (text === BTN.ANDROID) {
-    await deliverAndroid(chatId);
-    return;
-  }
-  if (text === BTN.IOS) {
-    await deliverIos(chatId);
-    return;
-  }
-  if (text === BTN.VERSION) {
-    await cmdVersion(chatId);
-    return;
-  }
-  if (text === BTN.HELP) {
-    await cmdHelp(chatId);
-    return;
-  }
-  if (text === BTN.HOME) {
-    await cmdStart(chatId, from);
+  const pressedBtn = getSettings().buttons.find((b) => b.enabled && b.label === text);
+  if (pressedBtn) {
+    await runButtonAction(pressedBtn, chatId, from);
     return;
   }
 
@@ -513,19 +588,14 @@ async function handleMessage(msg) {
       return;
     }
     await sendMessage(chatId, `لم أفهم هذا الأمر. اختر من الأزرار بالأسفل 👇`, {
-      reply_markup: mainMenuKeyboard(),
+      reply_markup: mainMenuKeyboard(chatId),
     });
     return;
   }
 
-  // نص عادي: ربما الأدمن في حالة إدخال (سجل تغييرات/بث)
-  if (isAdmin(from.id)) {
-    const handled = await handleAdminText(msg);
-    if (handled) return;
-  }
-
+  // نص عادي بدون حالة: رد افتراضي بالقائمة
   await sendMessage(chatId, `اختر العملية المطلوبة من الأزرار بالأسفل 👇`, {
-    reply_markup: mainMenuKeyboard(),
+    reply_markup: mainMenuKeyboard(chatId),
   });
 }
 
@@ -541,6 +611,46 @@ async function showOsChoice(chatId, isUpdate = false) {
 
 async function handleCallbackQuery(cq) {
   const data = cq.data || '';
+
+  // --- أزرار لوحة التحكم (للمشرف فقط) — تُعالج أولاً وتُجيب عن الاستعلام ذاتها ---
+  if (data.startsWith('p:')) {
+    await handlePanelCallback(cq);
+    return;
+  }
+
+  // --- أزرار متابعة رفع نسخة جديدة (للمشرف فقط): نص التحديث / إشعار ---
+  if (data.startsWith('upl:')) {
+    if (!isAdmin(cq.from?.id)) {
+      await answerCallbackQuery(cq.id, '⛔ هذه الأزرار متاحة للمشرفين فقط.');
+      return;
+    }
+    await answerCallbackQuery(cq.id);
+    const upChatId = cq.message?.chat?.id;
+    if (!upChatId) return;
+    try {
+      if (data === 'upl:chlog') {
+        // ندخل وضع إدخال نص التحديث (نفس نمط changelog)
+        const meta = loadMeta();
+        setState(upChatId, { mode: 'changelog', back: 'app' });
+        await sendMessage(
+          upChatId,
+          `📝 أرسل <b>نص التحديث</b> الجديد (ما الجديد في هذه النسخة):\n\n` +
+            `<b>الحالي:</b>\n<code>${escapeHtml(meta.changelog || '(فارغ)')}</code>\n\n` +
+            `أرسل /cancel للإلغاء.`
+        );
+        return;
+      }
+      if (data === 'upl:notify') {
+        await cmdNotify(upChatId);
+        return;
+      }
+    } catch (e) {
+      console.error('خطأ في أزرار الرفع:', e.message);
+      await sendMessage(upChatId, `⚠️ حدث خطأ أثناء تنفيذ طلبك.`);
+    }
+    return;
+  }
+
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
   if (!chatId) return;
@@ -570,7 +680,7 @@ async function handleCallbackQuery(cq) {
     // ملاحظة: لا يمكن إرفاق ReplyKeyboard برسالة معدّلة (editMessageText يقبل Inline فقط)،
     // لذلك نرسل رسالة جديدة تحمل اللوحة الثابتة.
     if (data === 'menu:back') {
-      await sendMessage(chatId, WELCOME, { reply_markup: mainMenuKeyboard() });
+      await sendMessage(chatId, T('welcome'), { reply_markup: mainMenuKeyboard(chatId) });
       return;
     }
 
@@ -593,10 +703,36 @@ async function handleCallbackQuery(cq) {
 
 // ----------------- حلقة الاستطلاع -----------------
 async function main() {
-  console.log(`\n🤖 بوت ${APP} يعمل الآن (long polling)...`);
+  // تطبيق وصف البوت مرة واحدة فقط (بدون دخول في حلقة الاستطلاع)
+  if (process.argv.includes('--set-description')) {
+    try {
+      await applyBotDescription();
+      const s = getSettings();
+      console.log('✅ تم تطبيق وصف البوت:\n');
+      console.log(s.description);
+      console.log('\n— الوصف المختصر —');
+      console.log(s.shortDescription);
+      console.log('');
+      process.exit(0);
+    } catch (e) {
+      console.error('⚠️ فشل تطبيق وصف البوت:', e.message);
+      process.exit(1);
+    }
+  }
+
+  console.log(`\n🤖 بوت ${APP()} يعمل الآن (long polling)...`);
   console.log(`   BOT_TOKEN: ${config.botToken.slice(0, 6)}…`);
   console.log(`   المشرفون: ${config.adminIds.join(', ') || '(لا يوجد)'}`);
+  console.log(`   لوحة التحكم: /panel أو زر «${PANEL_BTN}» (للمشرف فقط)`);
   console.log(`   اضغط Ctrl+C للإيقاف.\n`);
+
+  // تطبيق وصف البوت (About) — يُتجاهل الخطأ حتى لا يمنع تشغيل البوت
+  try {
+    await applyBotDescription();
+    console.log('✅ تم تطبيق وصف البوت.\n');
+  } catch (e) {
+    console.warn('⚠️ تعذّر تطبيق وصف البوت:', e.message);
+  }
 
   let offset = 0;
   // eslint-disable-next-line no-constant-condition

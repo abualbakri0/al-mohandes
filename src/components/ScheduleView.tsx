@@ -471,7 +471,7 @@ export default function ScheduleView({ isDeveloper, department }: Props) {
                             <div className="flex items-center gap-4 mt-1 text-sm text-slate-500 dark:text-slate-400 flex-wrap">
                               <span className="flex items-center gap-1">
                                 <Clock className="w-4 h-4" />
-                                <span dir="ltr">{formatTimeRange(lecture.start_time, lecture.end_time)}</span>
+                                <span>{formatTimeRange(lecture.start_time, lecture.end_time)}</span>
                               </span>
                               {lecture.location && (
                                 <span className="flex items-center gap-1">
