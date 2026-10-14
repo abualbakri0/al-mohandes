@@ -124,6 +124,13 @@ export async function setMyShortDescription(shortDescription, languageCode) {
 // تنزيل ملف من Telegram إلى المسار المحلي (لاستقبال APK من الأدمن)
 export async function downloadFile(fileId, destPath) {
   const file = await call('getFile', { file_id: fileId });
+  // حد تيليجرام: البوتات لا تستطيع تنزيل ملفات أكبر من 20MB (رابط التنزيل يعيد 404)
+  const TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024;
+  if (file.file_size && file.file_size > TG_DOWNLOAD_LIMIT) {
+    throw new Error(
+      `حجم الملف (${(file.file_size / 1048576).toFixed(1)}MB) يتجاوز حد تيليجرام لملفات البوت (20MB). استخدم الرفع عبر رابط مباشر من /panel.`
+    );
+  }
   const url = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`تنزيل الملف فشل: ${res.status}`);

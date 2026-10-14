@@ -20,7 +20,7 @@
 //   • ضبط وصف البوت تلقائياً عند كل تشغيل (يمكن تطبيقه مرة واحدة عبر:
 //     node telegram-bot/bot.mjs --set-description)
 
-import { existsSync, statSync, unlinkSync, renameSync, copyFileSync } from 'node:fs';
+import { existsSync, statSync, unlinkSync, renameSync, copyFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { config, isAdmin, assertConfigured } from './config.mjs';
@@ -243,9 +243,9 @@ async function deliverAndroid(chatId) {
   const apkPath = meta.apkFile ? join(config.releasesDir, meta.apkFile) : null;
   const size = apkPath ? safeSize(apkPath) : null;
 
-  // حد أقصى آمن لإرسال الملف عبر البوت (يمكن تجاوزه على الشبكات السريعة/السيرفرات).
-  // إذا كان الملف أكبر أو لم يكن متاحاً، نستخدم الرابط الاحتياطي.
-  const MAX_FILE_SEND = 8 * 1024 * 1024; // 8MB
+  // حد إرسال البوت للملفات عبر Telegram هو 50MB — نستخدم 45MB بهامش أمان.
+  // إذا كان الملف أكبر أو غير موجود، نستخدم رابط التنزيل الاحتياطي.
+  const MAX_FILE_SEND = 45 * 1024 * 1024; // 45MB
   const canSendFile = apkPath && existsSync(apkPath) && size != null && size <= MAX_FILE_SEND;
 
   // 1) إرسال الملف مباشرةً إن كان الحجم مناسباً
@@ -277,7 +277,17 @@ async function deliverAndroid(chatId) {
     return;
   }
 
-  // 3) لا ملف ولا رابط
+  // 3) لا ملف ولا رابط — للمشرف نعرض سبباً واضحاً وخطوات الحل
+  if (isAdmin(chatId)) {
+    const missing = apkPath && !existsSync(apkPath);
+    await sendMessage(
+      chatId,
+      `⚠️ لا يوجد ملف APK على الخادم${missing ? ' (الملف مفقود — أعد رفعه)' : ''} ولا رابط تنزيل بديل.\n\n` +
+        `• ارفع ملف APK هنا مباشرةً (حتى 20MB)، أو عبر زر «📤 رفع نسخة جديدة» في /panel.\n` +
+        `• للملفات الأكبر: ضع رابطاً مباشراً من /panel ← 🔗 الروابط ← رابط التنزيل.`
+    );
+    return;
+  }
   await sendMessage(chatId, T('androidUnavailable'));
 }
 
@@ -418,8 +428,22 @@ async function handleDocument(msg) {
     return;
   }
 
+  // حد تيليجرام: البوت لا يستطيع تنزيل ملفات أكبر من 20MB — نتحقق مبكراً برسالة واضحة
+  const TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024; // 20MB
+  if (doc.file_size && doc.file_size > TG_DOWNLOAD_LIMIT) {
+    await sendMessage(
+      chatId,
+      `⚠️ حجم الملف (${(doc.file_size / 1048576).toFixed(1)}MB) يتجاوز حد تيليجرام لاستقبال ملفات البوت (20MB).\n\n` +
+        `الحل: ارفع الملف على رابط مباشر ثم استخدم زر «📤 رفع نسخة جديدة (APK)» في /panel وألصق الرابط.`
+    );
+    return;
+  }
+
   await sendChatAction(chatId, 'upload_document');
   await sendMessage(chatId, `⏳ جاري حفظ النسخة الجديدة...`);
+
+  // مجلد releases/ مستثنى من حاوية Railway — ننشئه عند الحاجة
+  try { mkdirSync(config.releasesDir, { recursive: true }); } catch { /* تجاهل */ }
 
   const targetName = 'المهندس.apk';
   const targetPath = join(config.releasesDir, targetName);
@@ -723,6 +747,10 @@ function startHealthServer() {
 
 // ----------------- حلقة الاستطلاع -----------------
 async function main() {
+  // مجلدا البيانات والنسخ مستثنيان من حاوية Railway — ننشئهما عند كل إقلاع
+  try { mkdirSync(config.dataDir, { recursive: true }); } catch { /* تجاهل */ }
+  try { mkdirSync(config.releasesDir, { recursive: true }); } catch { /* تجاهل */ }
+
   // تحميل بيانات البوت من Supabase (أو الملفات المحلية) قبل أي شيء
   await initDb();
 
