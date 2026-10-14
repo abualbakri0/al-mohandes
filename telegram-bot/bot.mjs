@@ -37,6 +37,7 @@ import {
   openPanel,
   handlePanelCallback,
   handlePanelInput,
+  handleButtonMedia,
   applyBotDescription,
   broadcast,
   PANEL_BTN,
@@ -44,6 +45,9 @@ import {
 import {
   sendMessage,
   sendDocument,
+  sendPhoto,
+  sendVideo,
+  sendDocumentId,
   sendChatAction,
   getUpdates,
   answerCallbackQuery,
@@ -168,6 +172,46 @@ async function runButtonAction(btn, chatId, from) {
         reply_markup: {
           inline_keyboard: [[{ text: btn.label, url: btn.url || 'https://example.com' }]],
         },
+      });
+    case 'text':
+      return sendMessage(chatId, btn.text || btn.label, {
+        reply_markup: mainMenuKeyboard(chatId),
+      });
+    case 'photo':
+      if (btn.fileId) {
+        try {
+          await sendPhoto(chatId, btn.fileId, btn.caption ? escapeHtml(btn.caption) : undefined);
+          return;
+        } catch (e) {
+          console.error('فشل إرسال صورة الزر، سيتم إرسال نص بديل:', e.message);
+        }
+      }
+      return sendMessage(chatId, btn.caption || btn.label, {
+        reply_markup: mainMenuKeyboard(chatId),
+      });
+    case 'video':
+      if (btn.fileId) {
+        try {
+          await sendVideo(chatId, btn.fileId, btn.caption ? escapeHtml(btn.caption) : undefined);
+          return;
+        } catch (e) {
+          console.error('فشل إرسال فيديو الزر، سيتم إرسال نص بديل:', e.message);
+        }
+      }
+      return sendMessage(chatId, btn.caption || btn.label, {
+        reply_markup: mainMenuKeyboard(chatId),
+      });
+    case 'file':
+      if (btn.fileId) {
+        try {
+          await sendDocumentId(chatId, btn.fileId, btn.caption ? escapeHtml(btn.caption) : undefined);
+          return;
+        } catch (e) {
+          console.error('فشل إرسال ملف الزر، سيتم إرسال نص بديل:', e.message);
+        }
+      }
+      return sendMessage(chatId, btn.caption || btn.label, {
+        reply_markup: mainMenuKeyboard(chatId),
       });
     default:
       return sendMessage(chatId, `اختر العملية المطلوبة من الأزرار بالأسفل 👇`, {
@@ -424,7 +468,13 @@ async function handleDocument(msg) {
 
   const name = doc.file_name || '';
   if (!/\.apk$/i.test(name) && doc.mime_type !== 'application/vnd.android.package-archive') {
-    await sendMessage(chatId, `⚠️ أرسل ملف APK فقط (امتداد .apk).`);
+    // ليس APK — ربما أراد المشرف إرفاقه بزر: نرشده بدل الرفض الجاف
+    await sendMessage(
+      chatId,
+      `⚠️ هذا الملف ليس APK (امتداد .apk).\n\n` +
+        `• لنشر نسخة تطبيق: أرسل ملف APK هنا مباشرةً.\n` +
+        `• لإرفاق هذا الملف بزر: افتح /panel ← 🔘 الأزرار ← «🖼️ وسائط» بجانب الزر (أو أنشئ زراً جديداً نوعه 📎 ملف)، ثم أعد إرسال الملف.`
+    );
     return;
   }
 
@@ -562,6 +612,30 @@ const ADMIN_COMMANDS = {
 async function handleMessage(msg) {
   const chatId = msg.chat.id;
   const from = msg.from || {};
+
+  // وسائط الأزرار من الأدمن (صورة/فيديو/ملف أثناء وضع الإرفاق) — قبل مسار APK
+  // ملاحظة: الصورة المرفقة بتسمية تحمل caption وليس text، لذلك نتحقق من الوسائط
+  // أولاً بغض النظر عن وجود نص، ثم نتحقق من النصوص لاحقاً في المسار المعتاد.
+  if (isAdmin(from.id) && (msg.photo || msg.video || msg.document)) {
+    const st = getState(chatId);
+    if (st && (st.mode === 'panel.btnmedia' || st.mode === 'panel.btncontent')) {
+      await handleButtonMedia(msg, st);
+      return;
+    }
+    // صورة/فيديو من الأدمن خارج وضع الإرفاق → إرشاد بدل التجاهل الصامت
+    // (المستندات تُمرَّر لمسار APK بالأسفل — وhandleDocument نفسه يرشد لغير-APK)
+    if (msg.photo || msg.video) {
+      await sendMessage(
+        chatId,
+        `🖼️ لاستخدام هذه الوسائط في زر:\n\n` +
+          `1️⃣ افتح /panel ← 🔘 الأزرار\n` +
+          `2️⃣ اضغط «🖼️ وسائط» بجانب الزر، أو أنشئ زراً جديداً واختر نوعه (صورة/فيديو/ملف)\n` +
+          `3️⃣ ثم أرسل الوسائط هنا\n\n` +
+          `💡 ملفات APK تُرفع مباشرةً هنا في أي وقت (بدون لوحة).`
+      );
+      return;
+    }
+  }
 
   // مستند (APK) من الأدمن
   if (msg.document) {

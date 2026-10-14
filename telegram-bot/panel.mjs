@@ -53,6 +53,18 @@ function fmtDate(iso) {
   }
 }
 
+function fmtSize(bytes) {
+  if (!bytes && bytes !== 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let n = bytes;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(1)} ${units[i]}`;
+}
+
 function appName() {
   return getSettings().appName || config.appName;
 }
@@ -86,6 +98,10 @@ const BUTTON_ACTIONS = [
   ['home', '🏠 رئيسية'],
   ['version', '📦 الإصدار'],
   ['url', '🔗 رابط خارجي'],
+  ['text', '📝 رسالة مخصصة'],
+  ['photo', '🖼️ صورة'],
+  ['video', '🎬 فيديو'],
+  ['file', '📎 ملف'],
 ];
 
 function actionLabel(action) {
@@ -197,13 +213,16 @@ function buttonsView() {
   for (const b of s.buttons) {
     rows.push([
       {
-        text: `${b.enabled ? '✅' : '❌'} ${b.label}  [${actionLabel(b.action)}]`,
+        text: `${b.enabled ? '✅' : '❌'} ${b.label}  [${actionLabel(b.action)}]${mediaBadge(b)}`,
         callback_data: `p:btg:${b.id}`,
       },
     ]);
     rows.push([
       { text: '✏️ تعديل النص', callback_data: `p:bte:${b.id}` },
       { text: '⬆️ لأعلى', callback_data: `p:btu:${b.id}` },
+    ]);
+    rows.push([
+      { text: '🖼️ وسائط', callback_data: `p:btm:${b.id}` },
       { text: '🗑 حذف', callback_data: `p:btd:${b.id}` },
     ]);
   }
@@ -214,7 +233,8 @@ function buttonsView() {
       `🔘 <b>إدارة أزرار الواجهة</b>\n\n` +
       `• اضغط على اسم الزر لتفعيله/تعطيله ✅/❌\n` +
       `• إجمالي الأزرار: <b>${s.buttons.length}</b>\n` +
-      `• «⬆️ لأعلى» يحرّك الزر مكانه في اللوحة.`,
+      `• «⬆️ لأعلى» يحرّك الزر مكانه في اللوحة.\n` +
+      `• «🖼️ وسائط» لإرفاق صورة/فيديو/ملف/رسالة مع أي زر.`,
     keyboard: rows,
   };
 }
@@ -274,6 +294,113 @@ function btnPickView(label) {
   };
 }
 
+// ----------------- وسائط الأزرار (صورة/فيديو/ملف/رسالة مخصصة) -----------------
+// تُخزَّن الوسائط كـ file_id من خوادم تيليجرام (دائم، ولا يستهلك مساحة على الخادم).
+
+const MEDIA_ACTION_NAMES = {
+  text: 'رسالة مخصصة 📝',
+  photo: 'صورة 🖼️',
+  video: 'فيديو 🎬',
+  file: 'ملف 📎',
+};
+
+function mediaBadge(b) {
+  if (b.action === 'photo') return b.fileId ? ' 🖼️' : ' 🖼️⚠️';
+  if (b.action === 'video') return b.fileId ? ' 🎬' : ' 🎬⚠️';
+  if (b.action === 'file') return b.fileId ? ' 📎' : ' 📎⚠️';
+  if (b.action === 'text') return b.text ? ' 📝' : ' 📝⚠️';
+  return '';
+}
+
+function mediaKindLabel(b) {
+  if (MEDIA_ACTION_NAMES[b.action]) return MEDIA_ACTION_NAMES[b.action];
+  return `إجراء: ${actionLabel(b.action)}`;
+}
+
+function btnMediaView(btnId) {
+  const s = getSettings();
+  const b = s.buttons.find((x) => x.id === btnId);
+  if (!b) {
+    return {
+      text: `⚠️ الزر غير موجود (ربما حُذف).`,
+      keyboard: [[{ text: '↩️ رجوع للأزرار', callback_data: 'p:btns' }]],
+    };
+  }
+  const has = b.action === 'text' ? Boolean(b.text) : Boolean(b.fileId);
+  const preview =
+    b.action === 'text'
+      ? String(b.text || '(فارغ)').slice(0, 120)
+      : (b.caption || '(بلا تسمية)') + (b.action === 'file' && b.fileName ? `\n• اسم الملف: ${b.fileName}` : '');
+  return {
+    text:
+      `🖼️ <b>وسائط الزر: ${escapeHtml(b.label)}</b>\n\n` +
+      `• النوع: <b>${mediaKindLabel(b)}</b>\n` +
+      `• الحالة: ${has ? '✅ مرفق' : '⚠️ غير مرفق بعد'}\n` +
+      `• المحتوى/التسمية: ${escapeHtml(preview)}`,
+    keyboard: [
+      [{ text: '📤 إرفاق / تغيير المحتوى', callback_data: `p:btma:${b.id}` }],
+      [{ text: '🗑️ إزالة الوسائط', callback_data: `p:btmd:${b.id}` }],
+      [{ text: '↩️ رجوع للأزرار', callback_data: 'p:btns' }],
+    ],
+  };
+}
+
+// استقبال محتوى زر (إنشاء جديد panel.btncontent أو تحديث panel.btnmedia)
+// يُنادى من bot.mjs عند وصول صورة/فيديو/مستند من الأدمن أثناء وضع الإرفاق.
+export async function handleButtonMedia(msg, state) {
+  const chatId = msg.chat.id;
+  const isCreate = state.mode === 'panel.btncontent';
+  // ملف APK داخل وضع الإرفاق — غالباً خطأ: نوضح بدل ابتلاعه كوسائط زر
+  if (msg.document) {
+    const nm = msg.document.file_name || '';
+    if (/\.apk$/i.test(nm) || msg.document.mime_type === 'application/vnd.android.package-archive') {
+      await sendMessage(
+        chatId,
+        `⚠️ هذا ملف APK — لنشره كنسخة تطبيق أرسل /cancel أولاً للخروج من وضع الإرفاق، ثم أعد إرسال الملف.\n\n` +
+          `أما إن كنت تريد إرفاقه بزر فعلاً، أعد إرساله بعد إعادة تسميته بغير امتداد .apk (غير مستحسن).`
+      );
+      return;
+    }
+  }
+  let media = null;
+  if (msg.photo && msg.photo.length) {
+    const best = msg.photo[msg.photo.length - 1];
+    media = { action: 'photo', fileId: best.file_id, fileName: undefined, text: undefined, caption: msg.caption || '' };
+  } else if (msg.video) {
+    media = { action: 'video', fileId: msg.video.file_id, fileName: undefined, text: undefined, caption: msg.caption || '' };
+  } else if (msg.document) {
+    media = { action: 'file', fileId: msg.document.file_id, fileName: msg.document.file_name || 'ملف', text: undefined, caption: msg.caption || '' };
+  }
+  if (!media) {
+    await sendMessage(chatId, `⚠️ أرسل <b>صورة</b> أو <b>فيديو</b> أو <b>ملفاً</b> (يمكنك إرفاق تسمية معها).\n\nأرسل /cancel للإلغاء.`);
+    return;
+  }
+  const s = getSettings();
+  if (isCreate) {
+    s.buttons.push({ id: `b${Date.now().toString(36)}`, label: state.label, enabled: true, ...media });
+    saveSettings(s);
+    clearState(chatId);
+    await sendMessage(chatId, `✅ تم إضافة الزر <b>${escapeHtml(state.label)}</b> مع ${mediaKindLabel(media)} بنجاح.`);
+    await renderPanel(chatId, null, 'btns');
+  } else {
+    const b = s.buttons.find((x) => x.id === state.id);
+    if (!b) {
+      clearState(chatId);
+      await sendMessage(chatId, `⚠️ الزر غير موجود (ربما حُذف).`);
+      return;
+    }
+    b.action = media.action;
+    b.fileId = media.fileId;
+    b.fileName = media.fileName;
+    b.text = undefined;
+    b.caption = media.caption;
+    saveSettings(s);
+    clearState(chatId);
+    await sendMessage(chatId, `✅ تم إرفاق ${mediaKindLabel(media)} مع زر <b>${escapeHtml(b.label)}</b>.`);
+    await renderPanel(chatId, null, 'btnmedia', b.id);
+  }
+}
+
 function buildView(name, arg) {
   switch (name) {
     case 'main':
@@ -292,6 +419,8 @@ function buildView(name, arg) {
       return statsView();
     case 'btnpick':
       return btnPickView(arg || '');
+    case 'btnmedia':
+      return btnMediaView(arg || '');
     default:
       return mainView();
   }
@@ -566,6 +695,43 @@ export async function handlePanelCallback(cq) {
         return true;
       }
 
+      // ---- وسائط زر: عرض شاشة الوسائط ----
+      case 'btm':
+        await renderPanel(chatId, messageId, 'btnmedia', arg);
+        return true;
+
+      // ---- وسائط زر: بدء الإرفاق (صورة/فيديو/ملف/نص) ----
+      case 'btma': {
+        const s = getSettings();
+        const b = s.buttons.find((x) => x.id === arg);
+        if (!b) return true;
+        setState(chatId, { mode: 'panel.btnmedia', id: b.id, back: 'btns' });
+        await prompt(
+          chatId,
+          `📤 أرسل المحتوى لزر <b>${escapeHtml(b.label)}</b>:\n\n` +
+            `• <b>صورة</b> 🖼️ أو <b>فيديو</b> 🎬 أو <b>ملف</b> 📎 (مع تسمية اختيارية)\n` +
+            `• أو <b>نصاً</b> 📝 لتحويله إلى رسالة مخصصة\n\n/cancel للإلغاء.`,
+          'btns'
+        );
+        return true;
+      }
+
+      // ---- وسائط زر: إزالة (يعود الزر لعرض نص عادي) ----
+      case 'btmd': {
+        const s = getSettings();
+        const b = s.buttons.find((x) => x.id === arg);
+        if (!b) return true;
+        b.action = 'text';
+        b.text = b.label;
+        b.fileId = undefined;
+        b.fileName = undefined;
+        b.caption = '';
+        saveSettings(s);
+        await renderPanel(chatId, messageId, 'btnmedia', b.id);
+        await sendMessage(chatId, `🗑️ تمت إزالة الوسائط — أصبح الزر يعرض نصاً عادياً.`);
+        return true;
+      }
+
       // ---- إضافة زر جديد ----
       case 'btn': {
         if (arg === 'add') {
@@ -598,6 +764,19 @@ export async function handlePanelCallback(cq) {
             chatId,
             `🔗 أرسل <b>الرابط</b> لزر: <b>${escapeHtml(state.label)}</b>\n` +
               `مثال: <code>https://example.com</code>\n\n/cancel للإلغاء.`,
+            'btns'
+          );
+          return true;
+        }
+        // أنواع المحتوى (رسالة/صورة/فيديو/ملف): نجمع المحتوى بدل الحفظ الفوري
+        if (['text', 'photo', 'video', 'file'].includes(arg)) {
+          const need = { text: 'نص الرسالة 📝', photo: 'الصورة 🖼️', video: 'الفيديو 🎬', file: 'الملف 📎' }[arg];
+          setState(chatId, { mode: 'panel.btncontent', label: state.label, kind: arg, back: 'btns' });
+          await prompt(
+            chatId,
+            arg === 'text'
+              ? `📝 أرسل <b>نص الرسالة</b> التي ستظهر عند الضغط على زر <b>${escapeHtml(state.label)}</b>:\n\n/cancel للإلغاء.`
+              : `أرسل ${need} الآن لزر <b>${escapeHtml(state.label)}</b>:\n\n💡 يمكنك إرفاق <b>تسمية</b> معها (اكتبها في حقل التسمية قبل الإرسال).\n\n/cancel للإلغاء.`,
             'btns'
           );
           return true;
@@ -635,7 +814,7 @@ export async function handlePanelCallback(cq) {
           chatId,
           `📤 <b>رفع نسخة جديدة من التطبيق</b>\n\n` +
             `أرسل الآن <b>أحدهما</b>:\n\n` +
-            `1️⃣ <b>ملف APK</b> مباشرةً في هذه المحادثة (إن كان حجمه ≤ 50 ميجابايت).\n` +
+            `1️⃣ <b>ملف APK</b> مباشرةً في هذه المحادثة (إن كان حجمه ≤ 20 ميجابايت — حد تيليجرام).\n` +
             `2️⃣ <b>رابط تنزيل مباشر</b> للملف (للملفات الكبيرة أو الاستضافة على سيرفرك).\n\n` +
             `سيُعتمد الملف تلقائياً كـ<b>النسخة الحالية</b> التي يستلمها كل المستخدمين.\n\n` +
             `أرسل /cancel للإلغاء.`,
@@ -843,6 +1022,51 @@ export async function handlePanelInput(msg, state) {
       clearState(chatId);
       await sendMessage(chatId, `✅ تم تعديل نص الزر.`);
       await renderPanel(chatId, null, 'btns');
+      return true;
+    }
+
+    // ---- محتوى زر جديد من نوع رسالة (panel.btncontent + نص) ----
+    // (الصور/الفيديو/الملفات تصل عبر handleButtonMedia في bot.mjs)
+    case 'panel.btncontent': {
+      // إن كان النوع المطلوب وسائط (صورة/فيديو/ملف) ووصل نص بدلها → نرشد المشرف بدل إنشاء زر خاطئ
+      if (state.kind && state.kind !== 'text' && !msg.photo && !msg.video && !msg.document) {
+        const need = { photo: 'صورة 🖼️', video: 'فيديو 🎬', file: 'ملفاً 📎' }[state.kind] || 'المحتوى المطلوب';
+        await sendMessage(chatId, `⚠️ كنت قد اخترت نوع «${need}» — أرسل ${need} (وليس نصاً).\n\nأرسل /cancel للإلغاء.`);
+        return true; // نبقى في نفس وضع الانتظار
+      }
+      const s = getSettings();
+      s.buttons.push({
+        id: `b${Date.now().toString(36)}`,
+        action: 'text',
+        label: state.label || 'زر جديد',
+        text,
+        enabled: true,
+      });
+      saveSettings(s);
+      clearState(chatId);
+      await sendMessage(chatId, `✅ تم إضافة الزر <b>${escapeHtml(state.label || '')}</b> مع رسالة مخصصة 📝.`);
+      await renderPanel(chatId, null, 'btns');
+      return true;
+    }
+
+    // ---- تحديث زر موجود بنص (panel.btnmedia + نص) ----
+    case 'panel.btnmedia': {
+      const s = getSettings();
+      const b = s.buttons.find((x) => x.id === state.id);
+      if (!b) {
+        clearState(chatId);
+        await sendMessage(chatId, `⚠️ الزر غير موجود (ربما حُذف).`);
+        return true;
+      }
+      b.action = 'text';
+      b.text = text;
+      b.fileId = undefined;
+      b.fileName = undefined;
+      b.caption = '';
+      saveSettings(s);
+      clearState(chatId);
+      await sendMessage(chatId, `✅ تم تحويل زر <b>${escapeHtml(b.label)}</b> إلى رسالة مخصصة 📝.`);
+      await renderPanel(chatId, null, 'btnmedia', b.id);
       return true;
     }
 
