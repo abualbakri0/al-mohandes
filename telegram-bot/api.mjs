@@ -57,6 +57,33 @@ export async function sendDocument(chatId, filePath, caption, fileName) {
   }
 }
 
+// إرسال صورة عبر file_id (مخزّن في إعدادات الزر) مع تسمية اختيارية
+export async function sendPhoto(chatId, photo, caption) {
+  return call('sendPhoto', {
+    chat_id: chatId,
+    photo,
+    ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+  });
+}
+
+// إرسال فيديو عبر file_id مع تسمية اختيارية
+export async function sendVideo(chatId, video, caption) {
+  return call('sendVideo', {
+    chat_id: chatId,
+    video,
+    ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+  });
+}
+
+// إرسال مستند عبر file_id محفوظ (بدون رفع من القرص)
+export async function sendDocumentId(chatId, fileId, caption) {
+  return call('sendDocument', {
+    chat_id: chatId,
+    document: fileId,
+    ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+  });
+}
+
 export async function sendMessage(chatId, text, extra = {}) {
   return call('sendMessage', {
     chat_id: chatId,
