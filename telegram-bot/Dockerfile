@@ -8,6 +8,9 @@ WORKDIR /app
 # نسخ ملفات البوت
 COPY . .
 
+# مجلدا البيانات والنسخ مستثنيان من النسخ (.dockerignore) — ننشئهما فارغين
+RUN mkdir -p /app/data /app/releases
+
 # منفذ غير مطلوب (long polling)، لكن نعرّف بيئة الإنتاج
 ENV NODE_ENV=production
 

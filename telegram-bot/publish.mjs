@@ -9,7 +9,7 @@
 //   2. يحدّث telegram-bot/data/meta.json (الإصدار/التاريخ)
 // ثم يستطيع البوت إرسالها عبر /download وإشعار المشتركين عبر /notify
 
-import { existsSync, copyFileSync, unlinkSync, statSync, readFileSync } from 'node:fs';
+import { existsSync, copyFileSync, unlinkSync, statSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.mjs';
@@ -83,6 +83,7 @@ if (args.changelogFile) {
   if (existsSync(cf)) changelog = readFileSync(cf, 'utf8').trim();
 }
 
+try { mkdirSync(config.releasesDir, { recursive: true }); } catch { /* تجاهل */ }
 const targetPath = join(config.releasesDir, 'المهندس.apk');
 
 // استبدال آمن: انسخ لملف مؤقت ثم احذف القديم ثم سمِّ الجديد

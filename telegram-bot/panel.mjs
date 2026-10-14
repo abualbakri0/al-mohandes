@@ -30,7 +30,7 @@ import {
   setMyDescription,
   setMyShortDescription,
 } from './api.mjs';
-import { copyFileSync, unlinkSync, existsSync, writeFileSync } from 'node:fs';
+import { copyFileSync, unlinkSync, existsSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 // زر اللوحة في لوحة المفاتيح الثابتة (يظهر للأدمن فقط)
@@ -148,11 +148,20 @@ function textsView() {
 function appView() {
   const s = getSettings();
   const meta = loadMeta();
+  // حالة ملف APK الفعلي على الخادم (وليس فقط البيانات المسجلة)
+  let apkStatus = '❌ غير موجود';
+  try {
+    if (meta.apkFile && existsSync(join(config.releasesDir, meta.apkFile))) {
+      const sz = statSync(join(config.releasesDir, meta.apkFile)).size;
+      apkStatus = `✅ موجود (${escapeHtml(fmtSize(sz))})`;
+    }
+  } catch { /* يبقى غير موجود */ }
   return {
     text:
       `📦 <b>بيانات التطبيق</b>\n\n` +
       `• الاسم: <b>${escapeHtml(s.appName || config.appName)}</b>\n` +
       `• رقم الإصدار: <b>${escapeHtml(String(meta.versionName || '—'))}</b>\n` +
+      `• ملف APK: ${apkStatus}\n` +
       `• تاريخ النشر: <b>${fmtDate(meta.updatedAt)}</b>\n` +
       `• سجل التحديث: ${escapeHtml(String(meta.changelog || '—')).slice(0, 120)}`,
     keyboard: [
@@ -858,10 +867,20 @@ export async function handlePanelInput(msg, state) {
         return true; // نبقى في نفس وضع الانتظار
       }
       await sendMessage(chatId, `⏳ جاري تنزيل النسخة من الرابط وحفظها...`);
+      try { mkdirSync(config.releasesDir, { recursive: true }); } catch { /* تجاهل */ }
       const tmpPath = join(config.releasesDir, `dl-${Date.now()}.apk`);
       try {
         const size = await downloadApkFromUrl(url, tmpPath);
-        const meta = await adoptApk(tmpPath, url);
+        const meta = await adoptApk(tmpPath, url, chatId);
+        // إن لم يوجد رابط تنزيل بديل، نستخدم نفس الرابط كاحتياطي تلقائياً
+        // (مفيد للملفات الكبيرة التي لا يمكن إرسالها مباشرة عبر تيليجرام)
+        try {
+          const cur = getSettings();
+          if (!cur.links.downloadUrl) {
+            cur.links.downloadUrl = url;
+            saveSettings(cur);
+          }
+        } catch { /* تجاهل */ }
         await sendMessage(
           chatId,
           `✅ <b>تم اعتماد النسخة الجديدة من الرابط!</b>\n\n` +
@@ -915,11 +934,11 @@ async function downloadApkFromUrl(url, destPath) {
 
 // اعتماد ملف APK (محفوظ مسبقاً في tmpPath) كالنسخة الحالية وتحديث meta.json
 // versionHint: نص يُستنتج منه رقم الإصدار إن وُجد (اسم الملف/الرابط)
-async function adoptApk(tmpPath, versionHint) {
+async function adoptApk(tmpPath, versionHint, chatId) {
   const targetName = 'المهندس.apk';
+  try { mkdirSync(config.releasesDir, { recursive: true }); } catch { /* تجاهل */ }
   const targetPath = join(config.releasesDir, targetName);
   const oldMeta = loadMeta();
-  const { statSync } = await import('node:fs');
 
   const verMatch = String(versionHint || '').match(/(\d+\.\d+(?:\.\d+)?)/);
   const meta = {
