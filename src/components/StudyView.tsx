@@ -281,6 +281,7 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
             () => updateStudyTask(editingId, updateFields)
           );
           if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُنشر التعديل عند عودة الاتصال', 'info');
+          else showToast('تم التعديل بنجاح', `تم تحديث المهمة «${fields.subject}»`, 'success');
         }
       } else {
         const res = await runOrQueue(
@@ -362,10 +363,24 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
     }
   };
 
-  // Visibility: the developer manages the whole week (all days grouped), while
-  // a regular student only sees the tasks scheduled for today.
+  // Visibility: everyone sees the whole current week grouped by day.
+  // - Developer: manages ALL tasks (all days + all departments). Student tasks
+  //   from a previous offline session never leak into another student's view:
+  //   the visible list is ALWAYS re-filtered by the CURRENT department.
+  // - Student: their department's tasks for days from Saturday up to today
+  //   (cumulative through the week: Saturday's tasks stay visible on Sunday,
+  //   Sunday's join them, and so on until Friday). Days after today are hidden
+  //   until their turn comes.
+  // A new app week (Saturday) hides everything again — the week starts fresh.
   const todayName = todayArabicDay();
-  const visibleTasks = isDeveloper ? tasks : tasks.filter((t) => t.day === todayName);
+  const todayIdx = DAYS.indexOf(todayName as (typeof DAYS)[number]);
+  const deptFiltered = department ? tasks.filter((t) => !t.department || t.department === department || t.department === 'مشترك') : tasks;
+  const visibleTasks = isDeveloper
+    ? tasks
+    : deptFiltered.filter((t) => {
+        const idx = DAYS.indexOf(t.day as (typeof DAYS)[number]);
+        return idx >= 0 && todayIdx >= 0 && idx <= todayIdx;
+      });
 
   // A task is "done" for the current student when their private progress map
   // (falling back to the task's own completed flag for offline-created rows).
@@ -416,7 +431,7 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
             <p className="text-sm text-slate-500">
               {isDeveloper
                 ? `${tasks.length} مهمة — ${completedCount} مكتملة`
-                : `مهام ${todayName} — ${completedCount} من ${visibleTasks.length} مكتملة`}
+                : `مهام الأسبوع حتى ${todayName} — ${completedCount} من ${visibleTasks.length} مكتملة`}
             </p>
           </div>
         </div>
@@ -644,7 +659,7 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
         <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
           <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <p className="text-slate-500">
-            {isDeveloper ? 'لا توجد مهام مذاكرة بعد.' : `لا توجد مهام مذاكرة ليوم ${todayName}.`}
+            {isDeveloper ? 'لا توجد مهام مذاكرة بعد.' : `لا توجد مهام مذاكرة لهذا الأسبوع حتى يوم ${todayName}.`}
           </p>
         </div>
       ) : (
@@ -662,7 +677,7 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
                     <div
                       key={task.id}
                       className={`flex items-center justify-between px-5 py-4 transition-colors group animate-slide-in ${
-                        done ? 'bg-green-50/50' : 'hover:bg-slate-50'
+                        done ? 'bg-green-50/50 dark:bg-green-900/20' : 'hover:bg-slate-50'
                       }`}
                     >
                       <div className="flex items-center gap-4">

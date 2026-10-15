@@ -1,3 +1,6 @@
+import java.security.KeyStore
+import java.security.MessageDigest
+
 apply plugin: 'com.android.application'
 
 // Load signing configuration from keystore.properties (kept out of version control)
@@ -5,6 +8,43 @@ def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+// ============================================================
+// App-integrity pin: SHA-256 of the release signing certificate is baked
+// into BuildConfig.APP_SIGNER_SHA256 so MainActivity can detect APKs that
+// were repackaged/re-signed with a different key and refuse to run.
+// Computed automatically from keystore.properties on every build.
+// If unavailable → empty string → the runtime check is skipped (fail-open)
+// so CI/machines without the keystore still build.
+// ============================================================
+def signerSha256 = ''
+if (keystorePropertiesFile.exists() && keystoreProperties['storeFile'] && keystoreProperties['storePassword'] && keystoreProperties['keyAlias']) {
+    try {
+        def storeFile = rootProject.file(keystoreProperties['storeFile'])
+        if (storeFile.exists()) {
+            def pass = keystoreProperties['storePassword'].toCharArray()
+            def keyStore = null
+            for (type in ['JKS', 'PKCS12']) {
+                if (keyStore != null) break
+                try {
+                    def ks = KeyStore.getInstance(type)
+                    storeFile.withInputStream { ks.load(it, pass) }
+                    keyStore = ks
+                } catch (Exception ignored) {
+                    // try the next keystore format
+                }
+            }
+            def cert = keyStore != null ? keyStore.getCertificate(keystoreProperties['keyAlias']) : null
+            if (cert != null) {
+                def digest = MessageDigest.getInstance('SHA-256').digest(cert.getEncoded())
+                signerSha256 = digest.encodeHex().toString()
+            }
+        }
+    } catch (Exception e) {
+        logger.warn("APP_SIGNER_SHA256 pinning skipped: ${e.message}")
+        signerSha256 = ''
+    }
 }
 
 android {
@@ -16,6 +56,8 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 20
         versionName "1.0"
+        // Integrity pin consumed by MainActivity's signature check.
+        buildConfigField "String", "APP_SIGNER_SHA256", "\"${signerSha256}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -33,9 +75,18 @@ android {
             }
         }
     }
+    buildFeatures {
+        buildConfig = true
+    }
     buildTypes {
+        debug {
+            // Debug builds are signed with this machine's debug key — never pin here.
+            buildConfigField "String", "APP_SIGNER_SHA256", '""'
+        }
         release {
             signingConfig signingConfigs.release
+            // Integrity pin: release APK must be signed by exactly this certificate.
+            buildConfigField "String", "APP_SIGNER_SHA256", "\"${signerSha256}\""
             // Enable code shrinking, obfuscation and optimization to protect the source code
             minifyEnabled true
             shrinkResources true

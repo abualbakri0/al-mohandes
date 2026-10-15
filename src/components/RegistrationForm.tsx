@@ -52,20 +52,20 @@ export default function RegistrationForm({ onRegistered }: { onRegistered: (r: R
   };
 
   return (
-    <div className="bg-gradient-to-br from-teal-50 to-cyan-50 rounded-2xl p-6 border border-teal-100">
+    <div className="bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/50 dark:to-cyan-950/50 rounded-2xl p-6 border border-teal-100 dark:border-teal-900">
       <div className="flex items-center gap-3 mb-5">
         <div className="w-10 h-10 rounded-xl bg-teal-500 flex items-center justify-center shadow-md">
           <UserPlus className="w-5 h-5 text-white" />
         </div>
         <div>
-          <h3 className="text-lg font-bold text-slate-800">تسجيل الدخول</h3>
-          <p className="text-sm text-slate-500">سجّل بياناتك لتظهر للإدارة</p>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">تسجيل الدخول</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400">سجّل بياناتك لتظهر للإدارة</p>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">الاسم</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">الاسم</label>
           <div className="relative">
             <UserIcon className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
@@ -73,34 +73,34 @@ export default function RegistrationForm({ onRegistered }: { onRegistered: (r: R
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="أدخل اسمك الكامل"
-              className="w-full pr-11 pl-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
+              className="w-full pr-11 pl-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-black text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">رقم الهاتف</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">رقم الهاتف</label>
           <div className="relative">
             <Phone className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="05xxxxxxxx"
-              className="w-full pr-11 pl-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
+              placeholder="مثال: 7XXXXXXXX"
+              className="w-full pr-11 pl-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-black text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
               dir="ltr"
             />
           </div>
         </div>
 
         {error && (
-          <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in">
+          <div className="bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 text-sm rounded-lg px-4 py-2.5 animate-fade-in">
             {error}
           </div>
         )}
 
         {success && (
-          <div className="bg-green-50 text-green-600 text-sm rounded-lg px-4 py-2.5 flex items-center gap-2 animate-fade-in">
+          <div className="bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400 text-sm rounded-lg px-4 py-2.5 flex items-center gap-2 animate-fade-in">
             <CheckCircle2 className="w-4 h-4" />
             تم التسجيل بنجاح!
           </div>

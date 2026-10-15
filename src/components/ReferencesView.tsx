@@ -198,6 +198,7 @@ export default function ReferencesView({ isDeveloper, department }: Props) {
             () => updateReference(editingId, fields)
           );
           if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُنشر التعديل عند عودة الاتصال', 'info');
+          else showToast('تم التعديل بنجاح', `تم تحديث المرجع «${fields.title}»`, 'success');
         }
         resetForm();
         await load();

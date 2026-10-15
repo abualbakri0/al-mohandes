@@ -13,30 +13,43 @@ export function useOnlineStatus(): boolean {
   );
   const isOnlineRef = useRef(isOnline);
   isOnlineRef.current = isOnline;
+  const probeInFlight = useRef(false);
+  const consecutiveFailures = useRef(0);
+  const requestTimeoutMs = 4000;
 
   const probe = useCallback(async () => {
+    if (probeInFlight.current) return;
     // If the browser already says offline, stay offline.
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      consecutiveFailures.current = 0;
       if (isOnlineRef.current) setIsOnline(false);
       return;
     }
+    probeInFlight.current = true;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      // Cheap HEAD-style probe via Supabase REST (4s timeout race).
+      // Lightweight Supabase probe (4s timeout).
       // IMPORTANT: supabase-js v2 does NOT throw on network failure — it
       // resolves with { error }. We must inspect the error field, otherwise
       // the app believes it is online forever and the banner never shows.
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4000);
+      timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       const { error } = await supabase
         .from('app_settings')
         .select('id')
         .limit(1)
         .abortSignal(controller.signal);
-      clearTimeout(timer);
       if (error) throw error;
+      consecutiveFailures.current = 0;
       if (!isOnlineRef.current) setIsOnline(true);
     } catch {
+      // Detect an unusable connection promptly, rather than waiting for the
+      // next 15-second heartbeat after a single failed request.
+      consecutiveFailures.current += 1;
       if (isOnlineRef.current) setIsOnline(false);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      probeInFlight.current = false;
     }
   }, []);
 

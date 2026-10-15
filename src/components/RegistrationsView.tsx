@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Users, Trash2, Loader2, User as UserIcon, Phone, Search, Cpu, Zap, CheckCircle2, Clock, KeyRound } from 'lucide-react';
 import { displayDepartment, type Registration } from '@/lib/supabase';
-import { fetchRegistrations, deleteRegistration, approveRegistration, resetUserPassword, type Registration as RegType } from '@/lib/api';
-import RegistrationForm from './RegistrationForm';
+import { fetchRegistrations, deleteRegistration, approveRegistration, resetUserPassword } from '@/lib/api';
+import { fetchWithCache } from '@/lib/offlineStore';
 
 export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolean }) {
   const [registrations, setRegistrations] = useState<Registration[]>([]);
@@ -13,9 +13,10 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRegistrations(await fetchRegistrations());
+      const result = await fetchWithCache<Registration>('registrations', undefined, fetchRegistrations);
+      setRegistrations(result.rows);
     } catch {
-      setRegistrations([]);
+      // Keep the last successful result visible if this refresh fails offline.
     } finally {
       setLoading(false);
     }
@@ -24,10 +25,6 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
   useEffect(() => {
     load();
   }, [load]);
-
-  const handleRegistered = (reg: RegType) => {
-    setRegistrations((prev) => [reg, ...prev]);
-  };
 
   const handleApprove = async (id: string) => {
     try {
@@ -38,7 +35,7 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
     }
   };
 
-  const handleResetPassword = async (reg: RegType) => {
+  const handleResetPassword = async (reg: Registration) => {
     if (!window.confirm(`إعادة تعيين كلمة مرور ${reg.name}؟\nستصبح كلمة المرور مؤقتاً هي رقم هاتفه، وسيُطلب منه إنشاء كلمة مرور جديدة عند الدخول.`)) {
       return;
     }
@@ -90,14 +87,8 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {isDeveloper ? (
-          <div className="lg:col-span-1">
-            <RegistrationForm onRegistered={handleRegistered} />
-          </div>
-        ) : null}
-
-        <div className={isDeveloper ? "lg:col-span-2 space-y-4" : "lg:col-span-3 space-y-4"}>
+      <div className="space-y-4">
+        <div className="space-y-4">
           <div className="relative">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input

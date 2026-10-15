@@ -168,6 +168,8 @@ export default function ScheduleView({ isDeveloper, department }: Props) {
           );
           if (res.status === 'queued') {
             showToast('تم الحفظ محليًا', 'سيُنشر التعديل عند عودة الاتصال', 'info');
+          } else {
+            showToast('تم التعديل بنجاح', `تم تحديث المحاضرة «${subjectValue}»`, 'success');
           }
         }
       } else {

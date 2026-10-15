@@ -16,8 +16,22 @@ dist-ssr
 *.apk
 *.aab
 *.zip
-telegram-bot/releases/
+# حماية مفاتيح التوقيع والأسرار — لا ترفعها أبداً على Git
+*.keystore
+*.jks
+*.keystore.properties
+android/keystore.properties
+android/almohanndes.keystore
+android/app/google-services.json
+google-services.json
+.env
+.env.*
+!.env.example
+telegram-bot/.env
 telegram-bot/data/
+telegram-bot/releases/
+*.apk
+*.aab
 android/.gradle/
 android/.gradle_temp/
 android/build/

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
-import { X, Bell, AlertTriangle, Info, ChevronLeft } from 'lucide-react';
+import { X, Bell, AlertTriangle, CheckCircle2, ChevronLeft } from 'lucide-react';
 import { playNotificationSound, playRegistrationSound, vibrate } from '@/hooks/useNotificationSound';
 
 type ToastType = 'info' | 'success' | 'warning' | 'error';
@@ -50,7 +50,7 @@ function resolveDuration(toast: Toast): number {
 function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string) => void }) {
   const styles = TYPE_STYLES[toast.type];
   const durationMs = resolveDuration(toast);
-  const Icon = toast.icon ?? (toast.type === 'warning' ? AlertTriangle : toast.type === 'success' ? Info : toast.type === 'error' ? AlertTriangle : Bell);
+  const Icon = toast.icon ?? (toast.type === 'warning' ? AlertTriangle : toast.type === 'success' ? CheckCircle2 : toast.type === 'error' ? AlertTriangle : Bell);
   const touchStartX = useRef(0);
   const touchCurrentX = useRef(0);
   const [dragOffset, setDragOffset] = useState(0);
@@ -142,7 +142,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
       </div>
       <div className="flex-1 min-w-0">
         <p className="font-bold text-white text-sm">{toast.title}</p>
-        <p className="text-sm text-white/90 mt-0.5 leading-relaxed">{toast.message}</p>
+        <p className="text-sm text-white/95 mt-0.5 leading-relaxed">{toast.message}</p>
         {toast.actionLabel && toast.onAction && (
           <button
             onClick={(e) => {
@@ -186,15 +186,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const showToast = useCallback((title: string, message: string, type: ToastType = 'info', icon?: typeof Bell, actionLabel?: string, onAction?: () => void, durationMs?: number) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const styles = TYPE_STYLES[type];
-    styles.sound();
-    vibrate(styles.vibratePattern);
+    // Sound/vibration must NEVER block the toast itself: on some WebViews
+    // AudioContext creation throws synchronously, which previously aborted
+    // showToast entirely so NO popup ever appeared (neither in-app nor sound).
+    try { styles.sound(); } catch { /* ignore — visual toast still shows */ }
+    try { vibrate(styles.vibratePattern); } catch { /* ignore */ }
     setToasts((prev) => [...prev.slice(-4), { id, title, message, type, icon, actionLabel, onAction, durationMs }]);
   }, []);
 
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <div className="fixed top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-[100] flex flex-col items-center gap-2 w-full max-w-sm px-4 pointer-events-none">
+      <div className="fixed top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-[100] flex flex-col items-center gap-2 w-full max-w-sm px-4 pointer-events-none [&>*]:pointer-events-auto">
         {toasts.map((toast) => (
           <ToastCard key={toast.id} toast={toast} onDismiss={dismiss} />
         ))}

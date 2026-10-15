@@ -19,7 +19,8 @@ import {
 } from '@/lib/api';
 import { getQueue, dequeue, enqueue, type QueuedOp } from '@/lib/offlineStore';
 
-export type FlushResult = { done: number; failed: number };
+export type FlushFailure = { label: string; reason: string };
+export type FlushResult = { done: number; failed: number; failures: FlushFailure[] };
 export type SaveResult = { status: 'saved' | 'queued'; op: QueuedOp | null };
 
 /** Maximum size (bytes) of a PDF the developer may queue offline. */
@@ -138,30 +139,40 @@ async function executeOp(op: QueuedOp): Promise<void> {
   }
 }
 
-let flushing = false;
+let flushInFlight: Promise<FlushResult> | null = null;
 
 /** Publish every queued op in FIFO order. Keeps failures queued for retry. */
-export async function flushQueue(): Promise<FlushResult> {
-  if (flushing) return { done: 0, failed: 0 };
-  flushing = true;
-  try {
+export function flushQueue(): Promise<FlushResult> {
+  // If startup and the reconnect handler both request a flush, share the same
+  // result instead of letting one caller mistake an in-progress flush for an
+  // empty queue.
+  if (flushInFlight) return flushInFlight;
+
+  flushInFlight = (async () => {
     const queue = getQueue();
     let done = 0;
     let failed = 0;
+    const failures: FlushFailure[] = [];
     for (const op of queue) {
       try {
         await executeOp(op);
         dequeue(op.qid);
         done += 1;
-      } catch {
+      } catch (error) {
         failed += 1;
+        const reason = error instanceof Error
+          ? error.message
+          : String((error as { message?: string })?.message ?? error ?? 'خطأ غير معروف');
+        failures.push({ label: op.label, reason });
         // keep in queue for next retry
       }
     }
-    return { done, failed };
-  } finally {
-    flushing = false;
-  }
+    return { done, failed, failures };
+  })().finally(() => {
+    flushInFlight = null;
+  });
+
+  return flushInFlight;
 }
 
 /**

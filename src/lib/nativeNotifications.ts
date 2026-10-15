@@ -130,7 +130,7 @@ function showWebFallback(title: string, body: string): void {
   try {
     const notif = new Notification(title, {
       body,
-      icon: '/vite.svg',
+      icon: '/icons/icon-192.png',
       dir: 'rtl',
       lang: 'ar',
       requireInteraction: false,
@@ -147,10 +147,13 @@ function showWebFallback(title: string, body: string): void {
   }
 }
 
-/** Show an official system notification NOW (WhatsApp-style). */
+/** Show an official system notification NOW (WhatsApp-style).
+ * NOTE: sound/vibration are played by the ToastProvider toast that always
+ * accompanies an official event — we do NOT play them here to avoid a
+ * double (or triple with FCM) sound. Only the silent web-fallback path
+ * (no toast involved, e.g. Test / scheduled reminders) plays its own sound.
+ */
 export async function notifyNow(payload: NativeNotifyPayload): Promise<void> {
-  try { playNotificationSound(); } catch { /* ignore */ }
-  try { vibrate([200, 100, 200]); } catch { /* ignore */ }
   if (isNative()) {
     try {
       await ensureChannels();
@@ -178,8 +181,17 @@ export async function notifyNow(payload: NativeNotifyPayload): Promise<void> {
       return;
     } catch { /* fall through */ }
   }
+  // Web fallback path has no toast — play sound/vibrate here.
+  try { playNotificationSound(); } catch { /* ignore */ }
+  try { vibrate([200, 100, 200]); } catch { /* ignore */ }
   showWebFallback(payload.title, payload.body);
 }
+
+/** Web fallback timers (used when NOT on native): id -> timeout handle. */
+const webTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+/** Cap for setTimeout (~24.8 days); longer delays are clamped. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** Schedule a future reminder. Returns id for cancel/replace. */
 export async function scheduleNativeReminder(
@@ -206,11 +218,37 @@ export async function scheduleNativeReminder(
         ],
       });
     } catch { /* ignore */ }
+    return id;
   }
+  // Web/PWA fallback: the OS cannot wake a closed page, but while the app tab
+  // (or PWA window) is alive we emulate the scheduled reminder with setTimeout
+  // so lecture/evening/study reminders still fire instead of being lost silently.
+  try {
+    const delay = payload.at.getTime() - Date.now();
+    if (delay > 60_000) {
+      if (webTimers.has(id)) clearTimeout(webTimers.get(id)!);
+      webTimers.set(
+        id,
+        setTimeout(() => {
+          webTimers.delete(id);
+          try { playNotificationSound(); } catch { /* ignore */ }
+          try { vibrate([200, 100, 200]); } catch { /* ignore */ }
+          showWebFallback(payload.title, payload.body);
+        }, Math.min(delay, MAX_TIMER_MS)),
+      );
+    }
+  } catch { /* ignore */ }
   return id;
 }
 
 export async function cancelNativeReminders(ids: number[]): Promise<void> {
+  // Clear web fallback timers too (cheap and harmless on native).
+  try {
+    for (const id of ids) {
+      const t = webTimers.get(id);
+      if (t) { clearTimeout(t); webTimers.delete(id); }
+    }
+  } catch { /* ignore */ }
   if (!isNative() || ids.length === 0) return;
   try {
     await LocalNotifications.cancel({ notifications: ids.map((id) => ({ id })) });

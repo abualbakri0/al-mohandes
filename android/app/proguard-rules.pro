@@ -66,3 +66,11 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
+# ============================================================
+# Harder-to-reverse obfuscation (release only)
+# ============================================================
+# Move all classes into a single flat package so package structure leaks nothing
+-repackageclasses ''
+# Allow method/field visibility changes → more aggressive optimization
+-allowaccessmodification
+

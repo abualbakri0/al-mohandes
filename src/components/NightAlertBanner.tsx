@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { CalendarDays, Bell, X, Sun, Coffee } from 'lucide-react';
 import type { NightAlert } from '@/hooks/useNightAlerts';
 import { formatTimeRange } from '@/lib/time';
@@ -30,7 +30,6 @@ export default function NightAlertBanner({ alert, userName, onClose }: Props) {
                 {isHoliday ? <Coffee className="w-5 h-5 text-white" /> : <Bell className="w-5 h-5 text-teal-300" />}
               </div>
               <div>
-                <p className="text-white/70 text-xs">تنبيه المساء</p>
                 <p className="text-white font-bold text-sm">
                   {isHoliday ? 'إجازة غداً' : `محاضرات غداً — ${alert.dayName}`}
                 </p>

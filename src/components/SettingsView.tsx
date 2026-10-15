@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Settings, Loader2, Save, Check, KeyRound, GraduationCap, Calendar, CheckCircle2, CalendarDays } from 'lucide-react';
+import { Settings, Loader2, Save, KeyRound, GraduationCap, Calendar, CheckCircle2 } from 'lucide-react';
 import { ACADEMIC_LEVELS, SEMESTERS, type AppSettings } from '@/lib/supabase';
 import { fetchSettings, updateSettings } from '@/lib/api';
 
@@ -92,33 +92,33 @@ export default function SettingsView() {
           <Settings className="w-5 h-5 text-white" />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-slate-800">إعدادات البرنامج</h2>
-          <p className="text-sm text-slate-500">تحكم في المستوى الجامعي والترم ورمز المطور</p>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">إعدادات البرنامج</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">تحكم في المستوى الجامعي والترم ورمز المطور</p>
         </div>
       </div>
 
       {saved && (
-        <div className="bg-green-50 text-green-600 text-sm rounded-xl px-4 py-3 flex items-center gap-2 animate-fade-in">
+        <div className="bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400 text-sm rounded-xl px-4 py-3 flex items-center gap-2 animate-fade-in">
           <CheckCircle2 className="w-4 h-4" />
           تم حفظ التغييرات بنجاح
         </div>
       )}
 
       {/* Academic Level & Semester */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+        <div className="bg-white dark:bg-slate-950 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <div className="flex items-center gap-2 mb-2">
           <div className="w-8 h-8 rounded-lg bg-teal-100 flex items-center justify-center">
             <GraduationCap className="w-4 h-4 text-teal-600" />
           </div>
-          <h3 className="font-bold text-slate-800">المستوى الجامعي والترم</h3>
+          <h3 className="font-bold text-slate-800 dark:text-slate-100">المستوى الجامعي والترم</h3>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">المستوى</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">المستوى</label>
           <select
             value={level}
             onChange={(e) => setLevel(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all bg-white"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all bg-white dark:bg-black"
           >
             {ACADEMIC_LEVELS.map((l) => (
               <option key={l} value={l}>{l}</option>
@@ -127,11 +127,11 @@ export default function SettingsView() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">الترم</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">الترم</label>
           <select
             value={semester}
             onChange={(e) => setSemester(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all bg-white"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all bg-white dark:bg-black"
           >
             {SEMESTERS.map((s) => (
               <option key={s} value={s}>{s}</option>
@@ -140,14 +140,14 @@ export default function SettingsView() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">تاريخ بداية الفصل الدراسي</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">تاريخ بداية الفصل الدراسي</label>
           <input
             type="date"
             value={semesterStartDate}
             onChange={(e) => setSemesterStartDate(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-black text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
           />
-          <p className="text-xs text-slate-400 mt-1.5">يتم حساب رقم الأسبوع تلقائياً من هذا التاريخ في الواجهة الرئيسية</p>
+          <p className="text-xs text-slate-400 dark:text-slate-400 mt-1.5">يتم حساب رقم الأسبوع تلقائياً من هذا التاريخ في الواجهة الرئيسية</p>
         </div>
 
         <button
@@ -161,40 +161,40 @@ export default function SettingsView() {
       </div>
 
       {/* Developer Password */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+        <div className="bg-white dark:bg-slate-950 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <div className="flex items-center gap-2 mb-2">
-          <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-950/50 flex items-center justify-center">
             <KeyRound className="w-4 h-4 text-amber-600" />
           </div>
-          <h3 className="font-bold text-slate-800">تغيير رمز المطور</h3>
+          <h3 className="font-bold text-slate-800 dark:text-slate-100">تغيير رمز المطور</h3>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">الرمز الجديد</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">الرمز الجديد</label>
           <input
             type="password"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             placeholder="أدخل الرمز الجديد"
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-black text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
             dir="ltr"
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1.5">تأكيد الرمز</label>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">تأكيد الرمز</label>
           <input
             type="password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder="أعد إدخال الرمز"
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-black text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
             dir="ltr"
           />
         </div>
 
         {passwordError && (
-          <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5">
+          <div className="bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 text-sm rounded-lg px-4 py-2.5">
             {passwordError}
           </div>
         )}

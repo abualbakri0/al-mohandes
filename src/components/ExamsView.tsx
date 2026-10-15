@@ -105,6 +105,7 @@ export default function ExamsView({ isDeveloper, department }: Props) {
             () => updateExam(editingId, fields)
           );
           if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُنشر التعديل عند عودة الاتصال', 'info');
+          else showToast('تم التعديل بنجاح', `تم تحديث اختبار «${fields.subject}»`, 'success');
         }
       } else {
         const res = await runOrQueue(

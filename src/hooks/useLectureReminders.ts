@@ -5,7 +5,7 @@
 // Works when app is open OR minimized (system alarm).
 
 import { useEffect, useRef } from 'react';
-import { fetchLectures, fetchStudyTasks, fetchAssignments } from '@/lib/api';
+import { fetchLectures, fetchStudyTasks, fetchAssignments, fetchExams } from '@/lib/api';
 import { getNotificationPrefs } from '@/lib/notificationPrefs';
 import {
   scheduleNativeReminder,
@@ -13,7 +13,7 @@ import {
   notifyNow,
   CHANNEL_REMINDERS,
 } from '@/lib/nativeNotifications';
-import { formatTime12 } from '@/lib/time';
+import { formatTime12, formatTimeRange } from '@/lib/time';
 import type { Department, Lecture } from '@/lib/supabase';
 
 const DAY_INDEX: Record<string, number> = {
@@ -48,10 +48,10 @@ export function useLectureReminders(department: Department | null, userName?: st
   /** Reminder title: just "تذكير" (per request). */
   const reminderTitle = (): string => 'تذكير';
 
-  /** Body starts with the user's first name: "فلان، لديك ..." (per request). */
+  /** Address the signed-in user by their first and second registered names. */
   const reminderBody = (text: string): string => {
-    const first = (nameRef.current ?? '').trim().split(/\s+/)[0];
-    return first ? `${first}، ${text}` : text;
+    const firstTwoNames = (nameRef.current ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).join(' ');
+    return firstTwoNames ? `${firstTwoNames}، ${text}` : text;
   };
 
   useEffect(() => {
@@ -70,13 +70,17 @@ export function useLectureReminders(department: Department | null, userName?: st
       let lectures: Lecture[] = [];
       let studyTasks: { id: string; subject: string; task_type: 'review' | 'prestudy'; day: string; start_time: string }[] = [];
       let assignments: { id: string; subject: string; title: string; due_date: string }[] = [];
+      let exams: { id: string; subject: string; exam_date: string; start_time: string; end_time: string; location: string | null; teacher: string | null }[] = [];
       try {
-        [lectures, studyTasks, assignments] = await Promise.all([
+        [lectures, studyTasks, assignments, exams] = await Promise.all([
           fetchLectures(deptRef.current ?? undefined),
           fetchStudyTasks(deptRef.current ?? undefined).catch(() => [] as typeof studyTasks),
           prefs.assignmentReminders
             ? fetchAssignments(deptRef.current ?? undefined).catch(() => [] as typeof assignments)
             : Promise.resolve([] as typeof assignments),
+          prefs.assignmentReminders
+            ? fetchExams(deptRef.current ?? undefined).catch(() => [] as typeof exams)
+            : Promise.resolve([] as typeof exams),
         ]);
       } catch {
         return;
@@ -95,13 +99,14 @@ export function useLectureReminders(department: Department | null, userName?: st
           const teacher = lec.teacher ? ` — م.${lec.teacher}` : '';
           const place = lec.location ? ` — ${lec.location}` : '';
           const base = `${lec.subject}${teacher}${place}`;
-          // 60 min before (the single per-lecture reminder, per request:
+          const timeRange = lec.end_time ? formatTimeRange(lec.start_time, lec.end_time) : formatTime12(lec.start_time);
+          // 60 min before only (the single per-lecture reminder, per request:
           // "مرة في الصباح ... قبل المحاضرة بساعة")
           const t60 = new Date(start.getTime() - 60 * 60 * 1000);
           if (t60.getTime() > now.getTime() + 60_000) {
             const id = await scheduleNativeReminder({
               title: reminderTitle(),
-              body: reminderBody(`لديك محاضرة ${base} — الساعة ${formatTime12(lec.start_time)} (يوم ${lec.day})`),
+              body: reminderBody(`لديك محاضرة ${base} — من ${timeRange} (يوم ${lec.day})`),
               at: t60,
               data: { tab: 'schedule' },
             });
@@ -147,36 +152,37 @@ export function useLectureReminders(department: Department | null, userName?: st
         }
       }
 
-      // 3) Daily study tasks — next 16:00 (local). Shows the study tasks the
-      // developer scheduled for THAT day (today if before 16:00, else tomorrow).
+      // 3) Daily study tasks — schedule the next seven daily 16:00 reminders.
+      // Study tasks are a recurring weekly schedule; only completion progress
+      // resets at the Saturday week boundary, never the tasks themselves.
       if (prefs.studyMotivation) {
-        const at16 = new Date(now);
-        at16.setHours(16, 0, 0, 0);
-        if (at16.getTime() <= now.getTime()) {
-          at16.setDate(at16.getDate() + 1);
-        }
-        // Arabic day name for the notification's day.
         const dayNameOf = (d: Date): string | null => {
           const entry = Object.entries(DAY_INDEX).find(([, idx]) => idx === d.getDay());
           return entry ? entry[0] : null;
         };
-        const targetDay = dayNameOf(at16);
-        const dayTasks = targetDay
-          ? studyTasks
-              .filter((t) => t.day === targetDay)
-              .sort((a, b) => a.start_time.localeCompare(b.start_time))
-          : [];
-        // Only notify when there are actual tasks for that day (no empty nudges).
-        if (dayTasks.length > 0) {
+        for (let offset = 0; offset < 7; offset += 1) {
+          const at16 = new Date(now);
+          at16.setDate(now.getDate() + offset);
+          at16.setHours(16, 0, 0, 0);
+          if (at16.getTime() <= now.getTime() + 60_000) continue;
+
+          const targetDay = dayNameOf(at16);
+          if (!targetDay) continue;
+          const dayTasks = studyTasks
+            .filter((t) => t.day === targetDay)
+            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+          // Only notify on days that actually have study tasks.
+          if (dayTasks.length === 0) continue;
+
           const list = dayTasks
             .map((t) => `${t.subject} (${t.task_type === 'review' ? 'مراجعة' : 'مذاكرة'})`)
             .join('، ');
           const id = await scheduleNativeReminder({
-            title: 'مهام مذاكرة اليوم 📚',
-            body: reminderBody(`مهام ${targetDay}: ${list}`),
+            title: `مهام ${targetDay} 📚`,
+            body: reminderBody(`مهام اليوم: ${list}`),
             at: at16,
             channel: CHANNEL_REMINDERS,
-            data: { tab: 'study' },
+            data: { tab: 'study', day: targetDay },
           });
           scheduledIds.current.push(id);
         }
@@ -206,6 +212,32 @@ export function useLectureReminders(department: Department | null, userName?: st
           scheduledIds.current.push(id);
         }
       }
+
+      // 5) Exam reminders — one day before each exam date at 20:00.
+      if (prefs.assignmentReminders) {
+        for (const e of exams) {
+          const examDay = new Date(`${e.exam_date}T00:00:00`);
+          if (Number.isNaN(examDay.getTime())) continue;
+          const at = new Date(examDay);
+          at.setDate(examDay.getDate() - 1);
+          at.setHours(20, 0, 0, 0);
+          // Skip if the reminder time is already past; reschedule runs every 30min.
+          if (at.getTime() <= now.getTime() + 60_000) continue;
+          // Only within the next 8 days (keeps the queue small).
+          if (at.getTime() - now.getTime() > 8 * 24 * 3600 * 1000) continue;
+          const examTime = e.end_time ? formatTimeRange(e.start_time, e.end_time) : formatTime12(e.start_time);
+          const examPlace = e.location ? ` — القاعة ${e.location}` : '';
+          const examTeacher = e.teacher ? ` — م.${e.teacher}` : '';
+          const id = await scheduleNativeReminder({
+            title: 'تذكير باختبار ⏰',
+            body: reminderBody(`غدًا اختبار ${e.subject} — من ${examTime}${examPlace}${examTeacher} (يوم ${e.exam_date})`),
+            at,
+            channel: CHANNEL_REMINDERS,
+            data: { tab: 'exams' },
+          });
+          scheduledIds.current.push(id);
+        }
+      }
     };
 
     reschedule();
@@ -214,7 +246,10 @@ export function useLectureReminders(department: Department | null, userName?: st
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, []);
+    // Re-run when the department (or user) changes so reminders retarget
+    // immediately instead of waiting up to 30min for the next interval tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [department, userName]);
 }
 
 /** Fire-and-forget test notification (used in settings "جرّب الإشعار"). */
