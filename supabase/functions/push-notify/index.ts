@@ -13,7 +13,9 @@
 //   3) Dashboard -> Database -> Webhooks -> trigger on INSERT of:
 //        notifications, lectures, assignments, exams, reference_materials
 //      Type = Supabase Edge Function, function = push-notify.
-//      (Registrations/feedback are developer-only and intentionally skipped.)
+//      Include registrations only if developer devices need background alerts.
+//        registrations (developer devices only; requires is_developer on push_tokens).
+//      Feedback is intentionally not pushed while the app is closed.
 //
 // Manual test (curl):
 //   curl -i -X POST "https://<PROJECT>.supabase.co/functions/v1/push-notify" \
@@ -157,6 +159,13 @@ function buildContent(
       };
     case 'reference_materials':
       return { title: '📖 مرجع جديد', body: String(record.title ?? ''), tab: 'references', urgent: false };
+    case 'registrations':
+      return {
+        title: '👤 مسجل جديد',
+        body: `${String(record.name ?? 'مستخدم جديد')} — ${String(record.phone ?? '')}`,
+        tab: 'registrations',
+        urgent: false,
+      };
     default:
       return null;
   }
@@ -255,8 +264,14 @@ serve(async (req: Request) => {
 
   const supabase = createClient(supabaseUrl, serviceKey);
   let query = supabase.from('push_tokens').select('token, department').eq('alerts_enabled', true);
-  if (dept && dept !== 'مشترك') {
-    query = query.eq('department', dept);
+  if (sourceTable === 'registrations') {
+    query = query.eq('is_developer', true);
+  }
+  if (sourceTable !== 'registrations' && dept && dept !== 'مشترك') {
+    // Dept-scoped broadcast ALSO reaches devices whose department is still
+    // unknown (NULL — freshly installed, user not registered yet), matching
+    // the foreground behaviour in matchesDept() (null userDept => match all).
+    query = query.or(`department.eq.${dept},department.is.null`);
   }
   const { data: tokens, error } = await query;
   if (error) {

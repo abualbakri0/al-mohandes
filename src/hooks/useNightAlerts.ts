@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { DAYS, type Lecture, type Department } from '@/lib/supabase';
+import type { Lecture, Department } from '@/lib/supabase';
 import { fetchLectures } from '@/lib/api';
 
 const DAY_MAP: Record<string, number> = {
@@ -25,7 +25,8 @@ export function useNightAlerts(department?: Department): NightAlert | null {
     const now = new Date();
     const hour = now.getHours();
 
-    if (hour < 0 || hour >= 12) {
+    // Evening banner: show from 22:00 until midnight (the greeting says "مساء الخير").
+    if (hour < 22 || hour >= 24) {
       setAlert(null);
       return;
     }

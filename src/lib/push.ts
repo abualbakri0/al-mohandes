@@ -1,11 +1,10 @@
-﻿// ============================================================
-// FCM background push â€” the ONLY path that reaches a student when the app is
+﻿// FCM background push — the ONLY path that reaches a student when the app is
 // fully closed (killed). Realtime (useOfficialRealtime) still handles the
 // foreground instantly; FCM display messages are rendered by Android itself,
 // so they land in the tray even with no app process alive.
 //
 // Dedup: FCM foreground events and Realtime events both call
-// emitOfficialEvent() which persists markSeen(table,id) â€” first arrival wins.
+// emitOfficialEvent() which persists markSeen(table,id) — first arrival wins.
 //
 // Requires: google-services.json in android/app/ (gradle applies the
 // google-services plugin only when that file exists) + the Edge Function
@@ -28,10 +27,12 @@ export type PushRegistration = {
 const TOKEN_KEY = 'mohanndes_fcm_token';
 const PREFS_EVENT = 'mohanndes-notif-prefs-changed';
 
-// Latest UI handles â€” rebound by App on every render so callbacks stay fresh.
+// Latest UI handles — rebound by App on every render so callbacks stay fresh.
+let prefsListenerAttached = false;
 let displayBridge: { showToast: ToastFn; goToTab: (tab: TabId) => void } | null = null;
-// Student department (null until known) â€” kept server-side in push_tokens.
+// Student department (null until known) — kept server-side in push_tokens.
 let department: Department | null = null;
+let isDeveloperDevice = false;
 let initialized = false;
 
 export function getStoredPushToken(): string | null {
@@ -72,9 +73,11 @@ export function bindPushDisplay(b: { showToast: ToastFn; goToTab: (tab: TabId) =
 }
 
 /** Keep the server copy of the device token in sync with the student dept. */
-export function setPushDepartment(dept: Department | null): void {
+export function setPushDepartment(dept: Department | null, isDeveloper = false): void {
+  const changed = dept !== department || isDeveloper !== isDeveloperDevice;
   department = dept;
-  void uploadPushToken();
+  isDeveloperDevice = isDeveloper;
+  if (changed) void uploadPushToken();
 }
 
 /** Upsert token + prefs so the Edge Function can target/filter this device. */
@@ -86,6 +89,7 @@ async function uploadPushToken(): Promise<void> {
       {
         token,
         department,
+        is_developer: isDeveloperDevice,
         platform: 'android',
         alerts_enabled: getNotificationPrefs().contentAlerts,
         last_seen_at: new Date().toISOString(),
@@ -100,20 +104,23 @@ async function uploadPushToken(): Promise<void> {
 
 /**
  * Foreground FCM delivery: Android does NOT show notification messages while
- * the app is visible â€” it hands them to us instead. Render through the shared
+ * the app is visible — it hands them to us instead. Render through the shared
  * emit path (deduped against Realtime via markSeen).
+ *
+ * NOTE on the Capacitor data shape: for `notification` messages the custom
+ * keys arrive under `n.data` (mirror of the FCM `data` object), NOT under
+ * `n.notification.data`. We read both so no event is ever dropped silently.
  */
-function handleForegroundPush(n: { notification?: { title?: string; body?: string; data?: unknown } }): void {
+function handleForegroundPush(n: { data?: unknown; notification?: { title?: string; body?: string; data?: unknown } }): void {
   try {
-    const raw = n.notification?.data;
-    const data = (raw ?? {}) as Record<string, string>;
+    const data = ((n.data ?? n.notification?.data ?? {}) as Record<string, string>);
     const table = data.table;
     const id = data.id;
     if (!table || !id || !displayBridge) return;
     void emitOfficialEvent({
       table,
       id,
-      title: n.notification?.title ?? 'ًں”” ط¥ط´ط¹ط§ط± ط¬ط¯ظٹط¯',
+      title: n.notification?.title ?? '🔔 إشعار جديد',
       body: n.notification?.body ?? '',
       tab: (data.tab || 'notifications') as TabId,
       urgent: data.urgent === 'true',
@@ -127,11 +134,11 @@ function handleForegroundPush(n: { notification?: { title?: string; body?: strin
 
 /**
  * Tap on an FCM notification (any app state, including cold start from killed)
- * â†’ jump straight to the relevant tab. Mirrors local-notification tap handling.
+ * -> jump straight to the relevant tab. Mirrors local-notification tap handling.
  */
-function handlePushTap(a: { notification?: { data?: unknown } }): void {
+function handlePushTap(a: { data?: unknown; notification?: { data?: unknown } }): void {
   try {
-    const data = (a.notification?.data ?? {}) as Record<string, string>;
+    const data = ((a.data ?? a.notification?.data ?? {}) as Record<string, string>);
     const tab = data.tab as TabId | undefined;
     if (tab && displayBridge) displayBridge.goToTab(tab);
   } catch {
@@ -160,16 +167,16 @@ export async function initPush(): Promise<PushRegistration | null> {
   try {
     await PushNotifications.createChannel({
       id: CHANNEL_UPDATES,
-      name: 'طھط­ط¯ظٹط«ط§طھ ط§ظ„طھط·ط¨ظٹظ‚',
-      description: 'ط¥ط´ط¹ط§ط±ط§طھ ط§ظ„ظ…ط­ط§ط¶ط±ط§طھ ظˆط§ظ„طھظƒط§ظ„ظٹظپ ظˆط§ظ„ط§ط®طھط¨ط§ط±ط§طھ ظˆط§ظ„ظ…ط±ط§ط¬ط¹ ط§ظ„ط¬ط¯ظٹط¯ط©',
+      name: 'تحديثات التطبيق',
+      description: 'اشعارات المحاضرات والتكاليف والاختبارات والمراجع الجديدة',
       importance: 4,
       lights: true,
       lightColor: '#0D9488',
     });
     await PushNotifications.createChannel({
       id: CHANNEL_ALERTS,
-      name: 'طھظ†ط¨ظٹظ‡ط§طھ ط¹ط§ط¬ظ„ط©',
-      description: 'طھط£ط¬ظٹظ„ ط§ظ„ظ…ط­ط§ط¶ط±ط§طھ ظˆط§ظ„طھظ†ط¨ظٹظ‡ط§طھ ط§ظ„ط¹ط§ط¬ظ„ط© ظ…ظ† ط§ظ„ظ…ط·ظˆط±',
+      name: 'تنبيهات عاجلة',
+      description: 'تأجيل المحاضرات والتنبيهات العاجلة من المطور',
       importance: 5,
       lights: true,
       lightColor: '#EF4444',
@@ -183,13 +190,8 @@ export async function initPush(): Promise<PushRegistration | null> {
   } catch (e) {
     console.warn('[push] requestPermissions failed', e);
   }
-
-  try {
-    await PushNotifications.register();
-  } catch (e) {
-    // Typical cause: google-services.json not placed in android/app/ yet.
-    console.warn('[push] register failed â€” is google-services.json present?', e);
-  }
+  // Attach listeners before registering: Android may deliver the token
+  // immediately, and registering first can lose that one-time event.
 
   try {
     await PushNotifications.addListener('registration', (t) => {
@@ -198,9 +200,19 @@ export async function initPush(): Promise<PushRegistration | null> {
     });
     await PushNotifications.addListener('pushNotificationReceived', (n) => handleForegroundPush(n));
     await PushNotifications.addListener('pushNotificationActionPerformed', (a) => handlePushTap(a));
-    window.addEventListener(PREFS_EVENT, () => void uploadPushToken());
+    if (!prefsListenerAttached) {
+      prefsListenerAttached = true;
+      window.addEventListener(PREFS_EVENT, () => void uploadPushToken());
+    }
   } catch (e) {
     console.warn('[push] listeners failed', e);
+  }
+
+  try {
+    await PushNotifications.register();
+  } catch (e) {
+    // Typical cause: Firebase/Google Services is not configured correctly.
+    console.warn('[push] register failed — check google-services.json and Firebase setup', e);
   }
 
   await uploadPushToken();

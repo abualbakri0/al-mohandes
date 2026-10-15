@@ -116,15 +116,20 @@ function App() {
       wasOfflineRef.current = false;
       (async () => {
         if (pendingCount() > 0) {
-          const { done, failed } = await flushQueue();
+          const { done, failed, failures } = await flushQueue();
           if (done > 0) {
             showToast(
               'عاد الاتصال — تم النشر',
               `تم نشر ${done} عملية محفوظة أثناء عدم الاتصال${failed > 0 ? ` (${failed} عملية ستُعاد محاولتها لاحقًا)` : ''}`,
               'success'
             );
-          } else if (failed > 0) {
-            showToast('تعذر النشر', `${failed} عملية ما زالت بانتظار الاتصال`, 'warning');
+          }
+          if (failed > 0) {
+            const firstFailure = failures[0];
+            const details = firstFailure
+              ? `فشلت «${firstFailure.label}»: ${firstFailure.reason}`
+              : `${failed} عملية ما زالت في قائمة الانتظار`;
+            showToast('تعذر نشر بعض العمليات', details, 'warning', undefined, undefined, undefined, 10000);
           }
         }
         refreshAll();
@@ -137,10 +142,23 @@ function App() {
     if (!isOnline || !user) return;
     if (pendingCount() === 0) return;
     let cancelled = false;
-    flushQueue().then(({ done }) => {
-      if (!cancelled && done > 0) {
+    flushQueue().then(({ done, failed, failures }) => {
+      if (cancelled) return;
+      if (done > 0) {
         showToast('تم النشر', `تم نشر ${done} عملية محفوظة من قبل`, 'success');
         refreshAll();
+      }
+      if (failed > 0) {
+        const firstFailure = failures[0];
+        showToast(
+          'تعذر نشر بعض العمليات',
+          firstFailure ? `فشلت «${firstFailure.label}»: ${firstFailure.reason}` : `${failed} عملية ما زالت في قائمة الانتظار`,
+          'warning',
+          undefined,
+          undefined,
+          undefined,
+          10000
+        );
       }
     });
     return () => {
@@ -183,23 +201,32 @@ function App() {
           (parsed.name === DEV_NAME && parsed.phone === DEV_PHONE);
         if (isDev) {
           setUser(parsed);
-        } else {
-          checkRegistration(parsed.phone)
-            .then((fresh) => {
-              if (fresh && fresh.is_approved) {
-                localStorage.setItem('univ_user', JSON.stringify(fresh));
-                setUser(fresh);
-              } else {
-                localStorage.removeItem('univ_user');
-                localStorage.removeItem('is_dev');
-              }
-            })
-            .catch(() => setUser(parsed))
-            .finally(() => setCheckingAuth(false));
+          setCheckingAuth(false);
+          fetchSettings().then(setSettings).catch(() => {});
           return;
         }
+        // Restore the stored session immediately. Network validation must not
+        // hide the app or discard a valid local session while offline.
+        setUser(parsed);
+        setCheckingAuth(false);
+        void (async () => {
+          const fresh = await Promise.race([
+            checkRegistration(parsed.phone),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+          ]).catch(() => null);
+          if (fresh && fresh.is_approved) {
+            localStorage.setItem('univ_user', JSON.stringify(fresh));
+            setUser(fresh);
+          } else if (fresh && !fresh.is_approved) {
+            localStorage.removeItem('univ_user');
+            localStorage.removeItem('is_dev');
+            setUser(null);
+          }
+        })();
+        return;
       } catch {
-        localStorage.removeItem('univ_user');
+        // Preserve malformed/unreadable stored data for diagnosis/recovery;
+        // never turn a transient startup/storage error into an implicit logout.
       }
     }
     setCheckingAuth(false);
@@ -306,8 +333,8 @@ function App() {
     void initPush();
   }, []);
   useEffect(() => {
-    setPushDepartment(userDepartment);
-  }, [userDepartment]);
+    setPushDepartment(userDepartment, isDeveloper);
+  }, [userDepartment, isDeveloper]);
 
   // Scheduled native reminders: 60min + 15min before lectures, evening summary 19:00
   useLectureReminders(userDepartment, user?.name);
@@ -338,7 +365,7 @@ function App() {
   const nameParts = user.name.split(/\s+/);
   const firstName = nameParts[0] ?? '';
   const lastName = nameParts[nameParts.length - 1] ?? '';
-  const displayName = nameParts.length >= 4 ? `${firstName} ${lastName}` : firstName;
+  const displayName = [...nameParts.slice(0, 2), ...(nameParts.length > 2 ? [lastName] : [])].join(' ');
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col transition-colors duration-300">
@@ -457,7 +484,7 @@ function App() {
       {showBanner && nightAlert && (
         <NightAlertBanner
           alert={nightAlert}
-          userName={user.name}
+          userName={nameParts.length > 1 ? `${firstName} ${lastName}` : firstName}
           onClose={() => setBannerDismissed(true)}
         />
       )}

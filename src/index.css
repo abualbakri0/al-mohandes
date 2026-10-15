@@ -6,6 +6,23 @@
 
 :root {
   font-family: 'Tajawal', system-ui, sans-serif;
+  color-scheme: light;
+  --app-background: #f8fafc;
+  --surface: #ffffff;
+  --surface-muted: #f1f5f9;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --border-subtle: #e2e8f0;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --app-background: #000000;
+  --surface: #0a0a0a;
+  --surface-muted: #171717;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --border-subtle: #334155;
 }
 
 /* ── Android 15+/16 edge-to-edge support ───────────────────────────────
@@ -20,15 +37,17 @@
 /* خلفية الشاشة: تمنع ظهور وميض أبيض/أسود خلف الأشرطة الشفافة،
    وتُطابق خلفية التطبيق في الوضع الفاتح والداكن. */
 html {
-  background-color: #f8fafc;
+  background-color: var(--app-background);
 }
 
 html.dark {
-  background-color: #020617;
+  background-color: var(--app-background);
 }
 
 body {
   font-family: 'Tajawal', system-ui, sans-serif;
+  color: var(--text-primary);
+  background-color: var(--app-background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* يمنع التمرير المطاطي الذي يظهر خلف شريط الحالة */
@@ -37,6 +56,26 @@ body {
 
 * {
   font-family: 'Tajawal', system-ui, sans-serif;
+}
+
+.dark input:not([type="checkbox"]):not([type="radio"]),
+.dark select,
+.dark textarea {
+  color-scheme: dark;
+}
+
+.dark input:not([type="checkbox"]):not([type="radio"]):not([class*="bg-"]),
+.dark select:not([class*="bg-"]),
+.dark textarea:not([class*="bg-"]) {
+  background-color: #1e293b;
+  color: #f1f5f9;
+  border-color: #475569;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #94a3b8;
+  opacity: 1;
 }
 
 ::-webkit-scrollbar-track {
@@ -136,6 +175,220 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #64748b;
+}
+
+/* ── إصلاح شامل للوضع الليلي: أي صندوق بقي بالنهاري يُجبر على الداكن ──
+   بعض المكوّنات تستخدم ألوان Tailwind فاتحة ثابتة (bg-white, bg-slate-50 ...)
+   بدون مقابل dark:. هذه القواعد تجبرها على الداكن + ترفع تباين النص. */
+
+.dark .bg-white {
+  background-color: #0f172a !important;
+}
+.dark .bg-slate-50 {
+  background-color: #1e293b !important;
+}
+.dark .bg-slate-100 {
+  background-color: #1e293b !important;
+}
+.dark .bg-slate-200 {
+  background-color: #334155 !important;
+}
+.dark .bg-gray-50 {
+  background-color: #1e293b !important;
+}
+.dark .bg-gray-100 {
+  background-color: #1e293b !important;
+}
+.dark .bg-amber-50\/50,
+.dark .bg-amber-50 {
+  background-color: rgb(69 26 3 / 0.35) !important;
+}
+
+/* حدود فاتحة -> داكنة */
+.dark .border-slate-200 {
+  border-color: #334155 !important;
+}
+.dark .border-slate-100 {
+  border-color: #1e293b !important;
+}
+.dark .border-gray-200 {
+  border-color: #334155 !important;
+}
+.dark .divide-slate-200 > * + * {
+  border-color: #334155 !important;
+}
+
+/* نصوص داكنة على خلفية فاتحة -> فاتحة عالية التباين في الليلي */
+.dark .text-slate-800 {
+  color: #f1f5f9 !important;
+}
+.dark .text-slate-700 {
+  color: #e2e8f0 !important;
+}
+.dark .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+.dark .text-slate-500 {
+  color: #aebdd0 !important;
+}
+.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+.dark .text-gray-800 {
+  color: #f1f5f9 !important;
+}
+.dark .text-gray-700 {
+  color: #e2e8f0 !important;
+}
+.dark .text-gray-600 {
+  color: #cbd5e1 !important;
+}
+.dark .text-gray-500 {
+  color: #aebdd0 !important;
+}
+
+/* شارات باستيل فاتحة بدون dark: -> داكنة مقروءة */
+.dark .bg-red-100 {
+  background-color: rgb(127 29 29 / 0.5) !important;
+}
+.dark .bg-amber-100 {
+  background-color: rgb(120 53 15 / 0.5) !important;
+}
+.dark .bg-emerald-100 {
+  background-color: rgb(6 78 59 / 0.5) !important;
+}
+.dark .bg-green-100 {
+  background-color: rgb(20 83 45 / 0.5) !important;
+}
+.dark .bg-cyan-100 {
+  background-color: rgb(8 51 68 / 0.55) !important;
+}
+.dark .bg-blue-100 {
+  background-color: rgb(23 37 84 / 0.55) !important;
+}
+.dark .bg-indigo-100 {
+  background-color: rgb(49 46 129 / 0.55) !important;
+}
+.dark .bg-teal-100 {
+  background-color: rgb(19 78 74 / 0.5) !important;
+}
+.dark .bg-rose-100 {
+  background-color: rgb(76 5 25 / 0.5) !important;
+}
+.dark .bg-slate-100.text-red-600,
+.dark .bg-slate-100.text-amber-600 {
+  background-color: #1e293b !important;
+}
+.dark .text-red-600:not(.bg-white\/20):not(.text-white) {
+  color: #fca5a5 !important;
+}
+.dark .text-amber-600 {
+  color: #fcd34d !important;
+}
+.dark .text-amber-700 {
+  color: #fcd34d !important;
+}
+.dark .text-emerald-700,
+.dark .text-green-600,
+.dark .text-green-700 {
+  color: #6ee7b7 !important;
+}
+.dark .text-cyan-700 {
+  color: #67e8f9 !important;
+}
+.dark .text-blue-600,
+.dark .text-blue-700 {
+  color: #93c5fd !important;
+}
+.dark .text-indigo-600,
+.dark .text-indigo-700 {
+  color: #a5b4fc !important;
+}
+.dark .text-teal-600,
+.dark .text-teal-700 {
+  color: #5eead4 !important;
+}
+.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+/* خلفيات ملونة فاتحة جداً (50) بدون dark: */
+.dark .bg-red-50 {
+  background-color: rgb(69 10 10 / 0.35) !important;
+}
+.dark .bg-amber-50 {
+  background-color: rgb(69 26 3 / 0.35) !important;
+}
+.dark .bg-blue-50 {
+  background-color: rgb(23 37 84 / 0.35) !important;
+}
+.dark .bg-indigo-50 {
+  background-color: rgb(49 46 129 / 0.3) !important;
+}
+.dark .bg-teal-50 {
+  background-color: rgb(19 78 74 / 0.3) !important;
+}
+.dark .bg-cyan-50 {
+  background-color: rgb(8 51 68 / 0.35) !important;
+}
+.dark .bg-emerald-50 {
+  background-color: rgb(6 78 59 / 0.3) !important;
+}
+.dark .bg-green-50 {
+  background-color: rgb(20 83 45 / 0.3) !important;
+}
+.dark .bg-rose-50 {
+  background-color: rgb(76 5 25 / 0.35) !important;
+}
+
+/* hover فاتح -> داكن */
+.dark .hover\:bg-slate-50:hover {
+  background-color: #1e293b !important;
+}
+.dark .hover\:bg-slate-100:hover {
+  background-color: #334155 !important;
+}
+.dark .hover\:bg-slate-200:hover {
+  background-color: #475569 !important;
+}
+.dark .hover\:bg-teal-50:hover {
+  background-color: rgb(19 78 74 / 0.5) !important;
+}
+.dark .hover\:bg-red-50:hover {
+  background-color: rgb(69 10 10 / 0.5) !important;
+}
+
+/* مدخلات: إجبار أي input/select/textarea أبيض على الداكن مع نص فاتح */
+.dark input.bg-white,
+.dark select.bg-white,
+.dark textarea.bg-white,
+.dark input[class*="bg-white"],
+.dark select[class*="bg-white"],
+.dark textarea[class*="bg-white"] {
+  background-color: #1e293b !important;
+  color: #f1f5f9 !important;
+  border-color: #475569 !important;
+}
+.dark input::placeholder,
+.dark textarea::placeholder,
+.dark select::placeholder {
+  color: #8ea0b5 !important;
+  opacity: 1 !important;
+}
+
+/* ظلال الصناديق في الليلي: تخفيف التوهج الأبيض */
+.dark .shadow-sm,
+.dark .shadow-md,
+.dark .shadow-lg,
+.dark .shadow-xl {
+  --tw-shadow-color: rgb(0 0 0 / 0.6);
+}
+
+/* تحسين تباين النصوص الثانوية الصغيرة */
+.dark p.text-slate-500,
+.dark span.text-slate-500,
+.dark div.text-slate-500 {
+  color: #aebdd0 !important;
 }
 
 .bolt-badge,

@@ -1,3 +1,21 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+
+plugins {
+    // Auto-provision a matching JDK toolchain (e.g. the Java 17 toolchain the
+    // Capacitor plugins require via jvmToolchain{ languageVersion=17 }).
+    // Without this, the build fails with:
+    //   "Cannot find a Java installation matching {languageVersion=17} ... 
+    //    Toolchain download repositories have not been configured."
+    // The resolver auto-downloads a matching JDK (foojay) on first build.
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 include ':app'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')

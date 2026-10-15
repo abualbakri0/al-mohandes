@@ -28,6 +28,10 @@ export function getNotificationPrefs(): NotificationPrefs {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULTS };
     const parsed = JSON.parse(raw);
+    // Guard against corrupted/partial stored prefs (e.g. a bare string or
+    // null from an older version): any non-object falls back to defaults so
+    // notifications are NEVER silently disabled by bad local data.
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULTS };
     return {
       contentAlerts: parsed.contentAlerts !== false,
       lectureReminders: parsed.lectureReminders !== false,

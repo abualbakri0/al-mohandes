@@ -27,28 +27,28 @@ const TYPE_CONFIG = {
   postponement: {
     label: 'تأجيل',
     icon: AlertTriangle,
-    bg: 'bg-red-50',
-    border: 'border-red-200',
-    iconBg: 'bg-red-100',
-    iconColor: 'text-red-600',
+    bg: 'bg-red-50 dark:bg-red-950/30',
+    border: 'border-red-200 dark:border-red-900/70',
+    iconBg: 'bg-red-100 dark:bg-red-900/50',
+    iconColor: 'text-red-600 dark:text-red-300',
     accent: 'bg-red-500',
   },
   reminder: {
     label: 'تذكير',
     icon: Clock,
-    bg: 'bg-amber-50',
-    border: 'border-amber-200',
-    iconBg: 'bg-amber-100',
-    iconColor: 'text-amber-600',
+    bg: 'bg-amber-50 dark:bg-amber-950/30',
+    border: 'border-amber-200 dark:border-amber-900/70',
+    iconBg: 'bg-amber-100 dark:bg-amber-900/50',
+    iconColor: 'text-amber-600 dark:text-amber-300',
     accent: 'bg-amber-500',
   },
   general: {
     label: 'عام',
     icon: Info,
-    bg: 'bg-blue-50',
-    border: 'border-blue-200',
-    iconBg: 'bg-blue-100',
-    iconColor: 'text-blue-600',
+    bg: 'bg-blue-50 dark:bg-blue-950/30',
+    border: 'border-blue-200 dark:border-blue-900/70',
+    iconBg: 'bg-blue-100 dark:bg-blue-900/50',
+    iconColor: 'text-blue-600 dark:text-blue-300',
     accent: 'bg-blue-500',
   },
 } as const;
@@ -125,6 +125,7 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
             () => updateNotification(editingId, fields)
           );
           if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُنشر التعديل عند عودة الاتصال', 'info');
+          else showToast('تم التعديل بنجاح', `تم تحديث الإشعار «${fields.title}»`, 'success');
         }
       } else {
         const res = await runOrQueue(
@@ -169,15 +170,15 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in-up">
+    <div className="space-y-6 animate-fade-in-up transition-colors duration-300">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-rose-500 flex items-center justify-center shadow-md">
             <Bell className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-slate-800">الإشعارات الرسمية</h2>
-            <p className="text-sm text-slate-500">{notifications.length} إشعار</p>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">الإشعارات الرسمية</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">{notifications.length} إشعار</p>
           </div>
         </div>
         {isDeveloper && (
@@ -201,30 +202,30 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
       {showForm && isDeveloper && (
         <form
           onSubmit={handleSubmit}
-          className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4 animate-scale-in"
+          className="bg-white dark:bg-slate-800 rounded-2xl p-6 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4 animate-scale-in transition-colors duration-300"
         >
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">العنوان</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">العنوان</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="عنوان الإشعار"
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all"
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">الرسالة</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">الرسالة</label>
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               placeholder="محتوى الإشعار..."
               rows={3}
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all resize-none"
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all resize-none"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">النوع</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">النوع</label>
             <div className="flex gap-2 flex-wrap">
               {(['general', 'reminder', 'postponement'] as const).map((t) => {
                 const cfg = TYPE_CONFIG[t];
@@ -237,7 +238,7 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
                     className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                       type === t
                         ? `${cfg.iconBg} ${cfg.iconColor} ring-2 ring-offset-1`
-                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                        : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                     }`}
                     style={type === t ? { boxShadow: '0 0 0 2px currentColor' } : undefined}
                   >
@@ -249,15 +250,15 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">الموجه إلى</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">الموجه إلى</label>
             <div className="flex gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => setTargetDept('all')}
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                   targetDept === 'all'
-                    ? 'bg-slate-200 text-slate-700 ring-2 ring-slate-400'
-                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    ? 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-100 ring-2 ring-slate-400 dark:ring-slate-500'
+                    : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                 }`}
               >
                 <Users className="w-4 h-4" />
@@ -271,7 +272,7 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
                   className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                     targetDept === dept.id
                       ? dept.id === 'ميكاترونكس' ? 'bg-cyan-100 text-cyan-700 ring-2 ring-cyan-400' : dept.id === 'كهربائية' ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-400' : 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-400'
-                      : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                   }`}
                 >
                   {dept.id === 'ميكاترونكس' ? <Cpu className="w-4 h-4" /> : dept.id === 'كهربائية' ? <Zap className="w-4 h-4" /> : <Users className="w-4 h-4" />}
@@ -292,7 +293,7 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
             <button
               type="button"
               onClick={resetForm}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-6 py-2.5 rounded-xl transition-all"
+              className="bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-100 font-semibold px-6 py-2.5 rounded-xl transition-all"
             >
               إلغاء
             </button>
@@ -305,9 +306,9 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
           <Loader2 className="w-8 h-8 text-rose-500 animate-spin" />
         </div>
       ) : notifications.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
-          <Bell className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <p className="text-slate-500">لا توجد إشعارات.</p>
+        <div className="text-center py-16 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 transition-colors duration-300">
+          <Bell className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-500 dark:text-slate-400">لا توجد إشعارات.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -326,29 +327,29 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="font-bold text-slate-900 text-base">{notification.title}</h4>
+                      <h4 className="font-bold text-slate-900 dark:text-slate-100 text-base">{notification.title}</h4>
                       <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${cfg.iconBg} ${cfg.iconColor} border ${cfg.border}`}>
                         {cfg.label}
                       </span>
                       {notification.__pending && (
-                        <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300">
                           <CloudUpload className="w-3 h-3" />
                           بانتظار النشر
                         </span>
                       )}
                       {notification.department && (
                         <span className={`flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                          notification.department === 'ميكاترونكس' ? 'bg-cyan-100 text-cyan-700' : notification.department === 'كهربائية' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+                          notification.department === 'ميكاترونكس' ? 'bg-cyan-100 dark:bg-cyan-900/50 text-cyan-700 dark:text-cyan-300' : notification.department === 'كهربائية' ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300' : 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300'
                         }`}>
                           {notification.department === 'ميكاترونكس' ? <Cpu className="w-3 h-3" /> : notification.department === 'كهربائية' ? <Zap className="w-3 h-3" /> : <Users className="w-3 h-3" />}
                           {displayDepartment(notification.department)}
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-slate-700 mt-2 leading-relaxed border-r-2 border-slate-200 pr-3">{notification.message}</p>
-                    <div className="flex items-center gap-2 mt-3 pt-2 border-t border-slate-200/50">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <p className="text-xs text-slate-400">{formatRelative(notification.created_at)}</p>
+                    <p className="text-sm text-slate-700 dark:text-slate-200 mt-2 leading-relaxed border-r-2 border-slate-200 dark:border-slate-600 pr-3">{notification.message}</p>
+                    <div className="flex items-center gap-2 mt-3 pt-2 border-t border-slate-200/50 dark:border-slate-700/70">
+                      <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
+                      <p className="text-xs text-slate-400 dark:text-slate-500">{formatRelative(notification.created_at)}</p>
                     </div>
                   </div>
                   {isDeveloper && (
@@ -356,14 +357,14 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
                       <button
                         onClick={() => startEdit(notification)}
                         title={notification.__pending ? 'تعديل (لم يُنشر بعد)' : 'تعديل'}
-                        className="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-600 transition-all"
+                        className="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-slate-400 hover:bg-teal-50 dark:hover:bg-teal-950/50 hover:text-teal-600 dark:hover:text-teal-400 transition-all"
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => handleDelete(notification.id)}
                         title={notification.__pending ? 'إزالة من القائمة المحلية' : 'حذف'}
-                        className="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-red-400 hover:bg-red-100 hover:text-red-600 transition-all"
+                        className="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-red-400 hover:bg-red-100 dark:hover:bg-red-950/50 hover:text-red-600 dark:hover:text-red-300 transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

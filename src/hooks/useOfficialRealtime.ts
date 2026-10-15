@@ -14,9 +14,10 @@ import {
   type Assignment,
   type Exam,
   type ReferenceMaterial,
+  type StudyTask,
 } from '@/lib/supabase';
 import { shortName, consumeSelfWrite } from '@/lib/api';
-import { formatTime12 } from '@/lib/time';
+import { formatTime12, formatTimeRange } from '@/lib/time';
 import { emitOfficialEvent, type ToastFn } from '@/lib/officialEmit';
 import type { TabId } from '@/components/Navbar';
 
@@ -89,6 +90,7 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
         const row = payload.new as AppNotification;
         if (!matchesDept(row.department, deptRef.current)) return;
+        if (consumeSelfWrite('notifications', row.id)) return;
         const urgent = row.notification_type === 'postponement';
         emitNow('notifications', row.id, `${urgent ? '🚨 ' : '🔔 '}${row.title}`, row.message, 'notifications', urgent);
       })
@@ -109,17 +111,23 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'lectures' }, (payload) => {
         const row = payload.new as Lecture;
         if (!matchesDept(row.department, deptRef.current)) return;
-        const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} الساعة ${formatTime12(row.start_time)}`;
+        if (consumeSelfWrite('lectures', row.id)) return;
+        const timeRange = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
+        const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} من ${timeRange}`;
         const teacher = row.teacher ? ` — م.${row.teacher}` : '';
-        emitNow('lectures', row.id, '📚 محاضرة جديدة', `${row.subject}${when}${teacher}`, 'schedule');
+        const place = row.location ? ` — القاعة ${row.location}` : '';
+        emitNow('lectures', row.id, '📚 محاضرة جديدة', `${row.subject}${when}${teacher}${place}`, 'schedule');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lectures' }, (payload) => {
         const row = payload.new as Lecture;
         if (!matchesDept(row.department, deptRef.current)) return;
         if (consumeSelfWrite('lectures', row.id)) return;
         if (!isMeaningfulUpdate('lectures', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
-        const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} الساعة ${formatTime12(row.start_time)}`;
-        emitNow('lectures', row.id, '✏️ تعديل محاضرة', `${row.subject}${when}`, 'schedule', false, 'update');
+        const timeRange = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
+        const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} من ${timeRange}`;
+        const teacher = row.teacher ? ` — م.${row.teacher}` : '';
+        const place = row.location ? ` — القاعة ${row.location}` : '';
+        emitNow('lectures', row.id, '✏️ تعديل محاضرة', `${row.subject}${when}${teacher}${place}`, 'schedule', false, 'update');
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lectures' }, (payload) => {
         const oldRow = payload.old as Lecture;
@@ -130,6 +138,7 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'assignments' }, (payload) => {
         const row = payload.new as Assignment;
         if (!matchesDept(row.department, deptRef.current)) return;
+        if (consumeSelfWrite('assignments', row.id)) return;
         emitNow('assignments', row.id, '📝 تكليف جديد', `${row.subject}: ${row.title} — التسليم ${row.due_date}`, 'assignments');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'assignments' }, (payload) => {
@@ -148,14 +157,21 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'exams' }, (payload) => {
         const row = payload.new as Exam;
         if (!matchesDept(row.department, deptRef.current)) return;
-        emitNow('exams', row.id, '📋 اختبار جديد', `${row.subject} — يوم ${row.exam_date} الساعة ${formatTime12(row.start_time)}`, 'exams');
+        if (consumeSelfWrite('exams', row.id)) return;
+        const examTime = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
+        const examPlace = row.location ? ` — القاعة ${row.location}` : '';
+        const examTeacher = row.teacher ? ` — م.${row.teacher}` : '';
+        emitNow('exams', row.id, '📋 اختبار جديد', `${row.subject} — يوم ${row.exam_date} من ${examTime}${examPlace}${examTeacher}`, 'exams');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'exams' }, (payload) => {
         const row = payload.new as Exam;
         if (!matchesDept(row.department, deptRef.current)) return;
         if (consumeSelfWrite('exams', row.id)) return;
         if (!isMeaningfulUpdate('exams', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
-        emitNow('exams', row.id, '✏️ تعديل اختبار', `${row.subject} — يوم ${row.exam_date} الساعة ${formatTime12(row.start_time)}`, 'exams', false, 'update');
+        const examTime = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
+        const examPlace = row.location ? ` — القاعة ${row.location}` : '';
+        const examTeacher = row.teacher ? ` — م.${row.teacher}` : '';
+        emitNow('exams', row.id, '✏️ تعديل اختبار', `${row.subject} — يوم ${row.exam_date} من ${examTime}${examPlace}${examTeacher}`, 'exams', false, 'update');
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'exams' }, (payload) => {
         const oldRow = payload.old as Exam;
@@ -166,6 +182,7 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reference_materials' }, (payload) => {
         const row = payload.new as ReferenceMaterial;
         if (!matchesDept(row.department, deptRef.current)) return;
+        if (consumeSelfWrite('reference_materials', row.id)) return;
         emitNow('references', row.id, '📖 مرجع جديد', row.title, 'references');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reference_materials' }, (payload) => {
@@ -181,6 +198,26 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         if (consumeSelfWrite('reference_materials', oldRow.id)) return;
         emitNow('references', oldRow.id, '🗑️ حُذف مرجع', 'أُزيل مرجع من القائمة', 'references', false, 'delete');
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'study_tasks' }, (payload) => {
+        const row = payload.new as StudyTask;
+        if (!matchesDept(row.department, deptRef.current)) return;
+        if (consumeSelfWrite('study_tasks', row.id)) return;
+        const kind = row.task_type === 'review' ? 'مراجعة' : 'مذاكرة';
+        emitNow('study_tasks', row.id, '📚 مهمة جديدة', `${row.subject} (${kind}) — يوم ${row.day} الساعة ${formatTime12(row.start_time)}`, 'study');
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'study_tasks' }, (payload) => {
+        const row = payload.new as StudyTask;
+        if (!matchesDept(row.department, deptRef.current)) return;
+        if (consumeSelfWrite('study_tasks', row.id)) return;
+        if (!isMeaningfulUpdate('study_tasks', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
+        emitNow('study_tasks', row.id, '✏️ تعديل مهمة', `${row.subject} — يوم ${row.day} الساعة ${formatTime12(row.start_time)}`, 'study', false, 'update');
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'study_tasks' }, (payload) => {
+        const oldRow = payload.old as StudyTask;
+        if (!oldRow?.id) return;
+        if (consumeSelfWrite('study_tasks', oldRow.id)) return;
+        emitNow('study_tasks', oldRow.id, '🗑️ حُذفت مهمة', 'أُزيلت مهمة من القائمة', 'study', false, 'delete');
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registrations' }, (payload) => {
         if (!devRef.current) return;
         const row = payload.new as Registration;
@@ -191,7 +228,11 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         const row = payload.new as FeedbackMessage;
         emitNow('feedback', row.id, '💬 رسالة تواصل جديدة', `من ${shortName(row.sender_name)}: ${row.subject}`, 'feedback');
       })
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime] official channel failed:', status, err);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);

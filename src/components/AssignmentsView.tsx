@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Pencil, Trash2, Loader2, ClipboardList, CheckCircle2, Circle, Calendar, AlertTriangle, Cpu, Zap, Users, Trophy, X, CloudUpload } from 'lucide-react';
+﻿import { useState, useEffect, useCallback } from 'react';
+import { Plus, Pencil, Trash2, Loader2, ClipboardList, CheckCircle2, Circle, Calendar, AlertTriangle, Cpu, Zap, Users, Trophy, X } from 'lucide-react';
 import { DEPARTMENT_OPTIONS, displayDepartment, type Assignment, type Department } from '@/lib/supabase';
 import { fetchAssignments, addAssignment, updateAssignment, deleteAssignment, fetchAssignmentProgress, setAssignmentProgress, fetchAssignmentProgressCounts } from '@/lib/api';
 import { fetchWithCache, isPendingId, updateQueuedOp, dequeue } from '@/lib/offlineStore';
@@ -205,6 +205,7 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
             () => updateAssignment(editingId, fields)
           );
           if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُنشر التعديل عند عودة الاتصال', 'info');
+          else showToast('تم التعديل بنجاح', `تم تحديث التكليف «${fields.title}»`, 'success');
         }
       } else {
         const res = await runOrQueue(

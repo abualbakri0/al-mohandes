@@ -3,8 +3,8 @@
 #  (واحدة واحدة، الاسم في اليسار والقيمة في اليمين — بدون علامات تنصيص)
 # ============================================================
 
-# توكن البوت من @BotFather
-BOT_TOKEN=8580339526:AAGO1Pk186YgVDTRnCMYrIHAVD-M1gZpyKU
+# توكن البوت من @BotFather (أوقف التوكن القديم وأنشئ جديداً — كان مسروداً على GitHub)
+BOT_TOKEN=ضع_توكن_البوت_من_BotFather
 
 # معرّفات المشرفين (مفصولة بفاصلة)
 ADMIN_IDS=5555912861
@@ -17,6 +17,6 @@ IOS_URL=https://al-mohandes-app-2026.vercel.app
 
 # ---- Supabase (تخزين دائم — يحمي البيانات من مسح قرص Railway) ----
 SUPABASE_URL=https://wulycdwgvpriptzubazi.supabase.co
-# المفتاح الحالي (publishable). إن أردت صلاحية كاملة استخدم مفتاح الخدمة السري
+# المفتاح الحالي (publishable/anon). إن أردت صلاحية كاملة استخدم مفتاح الخدمة السري
 # من Supabase → Settings → API → service_role (secret) وضعه في SUPABASE_SERVICE_KEY
-SUPABASE_SERVICE_KEY=sb_publishable_JmjBwfWyG6Wjr76ZCwmkEw_ZnrZREGc
+SUPABASE_SERVICE_KEY=ضع_المفتاح_من_Supabase_Dashboard

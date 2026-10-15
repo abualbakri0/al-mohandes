@@ -25,6 +25,7 @@ export type QueuedOp = {
   table: OfflineTable | 'registration_approve' | 'registration_delete';
   action: 'insert' | 'update' | 'delete' | 'custom';
   /** For insert: full add-fields. For update: { id, fields }. For delete/custom: { id }. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: Record<string, any>;
   /** Arabic description shown in UI, e.g. "إضافة محاضرة: فيزياء". */
   label: string;
@@ -101,6 +102,7 @@ export function dequeue(qid: string): void {
  */
 export function updateQueuedOp(
   qid: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   patch: { payload?: Record<string, any>; label?: string }
 ): boolean {
   const q = getQueue();
@@ -158,6 +160,7 @@ export function applyQueueToRows<T extends { id: string }>(table: OfflineTable, 
   const ops = getQueue().filter((o) => o.table === table);
   if (ops.length === 0) return rows;
   const deletedIds = new Set<string>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updatedFields = new Map<string, Record<string, any>>();
   const inserts: (T & { __pending?: boolean })[] = [];
   for (const op of ops) {
@@ -194,12 +197,20 @@ export async function fetchWithCache<T extends { id: string }>(
   dept: string | undefined,
   fetcher: () => Promise<T[]>
 ): Promise<CacheResult<T>> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const rows = await fetcher();
+    // Some mobile/WebView network failures stall instead of rejecting. Bound
+    // the wait so the saved snapshot is shown rather than a permanent spinner.
+    const rows = await new Promise<T[]>((resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error('Data request timed out')), 8000);
+      fetcher().then(resolve, reject);
+    });
     saveSnapshot(table, dept, rows);
     return { rows: applyQueueToRows(table, rows), fromCache: false };
   } catch {
     const cached = loadSnapshot<T>(table, dept) ?? [];
     return { rows: applyQueueToRows(table, cached), fromCache: true };
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }

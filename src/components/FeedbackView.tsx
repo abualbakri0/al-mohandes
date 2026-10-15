@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { MessageSquare, Send, Trash2, Loader2, CheckCircle2, Circle, Phone, Clock, Mail, AlertCircle, Lightbulb, HelpCircle, User as UserIcon } from 'lucide-react';
 import { FEEDBACK_TYPES, type FeedbackType, type FeedbackMessage } from '@/lib/supabase';
 import { fetchFeedback, addFeedback, markFeedbackRead, deleteFeedback } from '@/lib/api';
+import { fetchWithCache } from '@/lib/offlineStore';
 
 type Props = {
   isDeveloper: boolean;
@@ -42,9 +43,10 @@ export default function FeedbackView({ isDeveloper, userName, userPhone }: Props
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setMessages(await fetchFeedback());
+      const result = await fetchWithCache<FeedbackMessage>('feedback_messages', undefined, fetchFeedback);
+      setMessages(result.rows);
     } catch {
-      setMessages([]);
+      // Keep the last successful result visible if this refresh fails offline.
     } finally {
       setLoading(false);
     }

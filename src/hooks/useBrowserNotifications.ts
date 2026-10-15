@@ -14,12 +14,12 @@ export function showBrowserNotification(title: string, body: string, tag?: strin
   try {
     const notif = new Notification(title, {
       body,
-      icon: '/vite.svg',
+      icon: '/icons/icon-192.png',
       tag: tag ?? title + body,
       dir: 'rtl',
       lang: 'ar',
       requireInteraction: false,
-      badge: '/vite.svg',
+      badge: '/icons/icon-192.png',
     });
 
     notif.onclick = () => {

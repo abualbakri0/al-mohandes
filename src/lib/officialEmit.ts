@@ -18,11 +18,31 @@ export type ToastFn = (
   onAction?: () => void,
 ) => void;
 
+let pruneDone = false;
+
 export function markSeen(table: string, id: string, evt: 'insert' | 'update' | 'delete' = 'insert'): boolean {
   try {
     const k = `mohanndes_notified_${table}_${id}${evt === 'insert' ? '' : `_${evt}`}`;
     if (localStorage.getItem(k)) return false;
     localStorage.setItem(k, '1');
+    // Prune old dedup keys so localStorage never fills up (which would make
+    // setItem throw and — worse — could silently block future notifications).
+    // Keeps only the 400 most recent keys; runs at most once per session.
+    if (!pruneDone) {
+      pruneDone = true;
+      try {
+        const keys: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('mohanndes_notified_')) keys.push(key);
+        }
+        if (keys.length > 500) {
+          keys.slice(0, keys.length - 400).forEach((key) => {
+            try { localStorage.removeItem(key); } catch { /* ignore */ }
+          });
+        }
+      } catch { /* ignore */ }
+    }
     return true;
   } catch {
     return true;
