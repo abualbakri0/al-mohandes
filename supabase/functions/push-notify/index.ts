@@ -2,15 +2,17 @@
 // Sends FCM "display" messages so users get notifications even when the app
 // is FULLY CLOSED (Realtime cannot do that — no JS alive to receive events).
 //
-// DEPLOY:
-//   1) supabase functions deploy push-notify
-//   2) Set secrets (Dashboard -> Edge Functions -> Secrets, or CLI):
+// Setup and deployment: see supabase/functions/push-notify/README.md.
+// The database trigger migration installs calls to this function.
+// For current deployment, follow supabase/functions/push-notify/README.md.
+//   1) Deploy with `supabase functions deploy push-notify`.
+//   2) Configure secrets as described in the README:
 //        FIREBASE_SERVICE_ACCOUNT = full JSON of a Firebase service-account key
 //                                   (Firebase Console -> Project settings ->
 //                                    Service accounts -> Generate new key)
-//        WEBHOOK_SECRET           = optional shared secret sent as
+//        WEBHOOK_SECRET           = required shared secret; see README
 //                                   Authorization: Bearer <secret>
-//   3) Dashboard -> Database -> Webhooks -> trigger on INSERT of:
+//   3) Legacy projects only: Dashboard -> Database -> Webhooks -> trigger on INSERT of:
 //        notifications, lectures, assignments, exams, reference_materials
 //      Type = Supabase Edge Function, function = push-notify.
 //      Include registrations only if developer devices need background alerts.
@@ -291,14 +293,17 @@ serve(async (req: Request) => {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  // Optional shared-secret check (Supabase DB Webhooks can send it as a header).
+  // The gateway JWT check is disabled; require the trigger's shared secret.
+  // NOTE: read ONLY x-webhook-secret. Never fall back to `authorization`,
+  // because the gateway requires `Authorization: Bearer <anon key>` which is
+  // a different credential — falling back to it always yields 401.
   const webhookSecret = Deno.env.get('WEBHOOK_SECRET');
-  if (webhookSecret) {
-    const raw = req.headers.get('authorization') ?? req.headers.get('x-webhook-secret') ?? '';
-    const bearer = raw.startsWith('Bearer ') ? raw.slice(7) : raw;
-    if (bearer !== webhookSecret) {
-      return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
-    }
+  if (!webhookSecret) {
+    return new Response(JSON.stringify({ error: 'WEBHOOK_SECRET is not configured' }), { status: 500 });
+  }
+  const raw = (req.headers.get('x-webhook-secret') ?? '').trim();
+  if (!raw || raw !== webhookSecret.trim()) {
+    return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
   }
 
   let body: {
@@ -456,15 +461,19 @@ serve(async (req: Request) => {
           message: {
             token: row.token as string,
             notification: { title: content.title, body: content.body },
-            data,
+            // Data copy: required so Capacitor fireNotification() wakes the
+            // bridge and routes the tap. Must be strings (FCM rejects others).
+            data: { ...data, title: content.title, body: content.body },
             android: {
               priority: 'high',
+              direct_boot_ok: true,
               notification: {
                 channel_id: channelId,
                 // Tints the small icon + app name so the tray matches app brand.
                 color: notifyColor,
                 default_vibrate_timings: true,
                 default_sound: true,
+                sticky: false,
                 visibility: 1,
               },
             },

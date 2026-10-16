@@ -30,11 +30,21 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- FCM killed-state defaults: when the app process is dead, Firebase
+             renders the tray notification itself using these manifest values.
+             Without them the OS falls back to a low-priority default channel
+             that many OEM skins (Xiaomi/Huawei/Samsung battery managers)
+             silently drop, so messages appear only while the app is alive. -->
+        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_notify" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_color" android:resource="@color/notificationAccent" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="mohanndes_updates" />
     </application>
 
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Official (system) notifications: Android 13+ runtime permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Exact reminder alarms (lecture reminders / evening summary) -->

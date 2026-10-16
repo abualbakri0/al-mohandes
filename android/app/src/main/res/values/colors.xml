@@ -9,4 +9,6 @@
     <color name="splashBackground">#0A1929</color>
     <!-- Transparent status/navigation bars during the launch splash -->
     <color name="splashStatusBar">#0A1929</color>
+    <!-- FCM killed-state tint for the status-bar icon (@drawable/ic_stat_notify) -->
+    <color name="notificationAccent">#0D9488</color>
 </resources>
