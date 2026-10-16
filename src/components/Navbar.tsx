@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { CalendarDays, BookOpen, ClipboardList, Bell, Users, GraduationCap, Menu, X, LogOut, User as UserIcon, FileText, Shield, Settings, BookMarked, MessageSquare, Sun, Moon, UserCog, Sparkles } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 
 export type TabId = 'schedule' | 'assignments' | 'study' | 'exams' | 'notifications' | 'references' | 'feedback' | 'registrations' | 'settings' | 'userSettings' | 'about';
 
@@ -43,6 +46,39 @@ type Props = {
 
 export default function Navbar({ activeTab, onTabChange, notificationCount, registrationsCount, sectionBadges, userName, userDepartment, isDeveloper, onLogout, theme, onToggleTheme }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [confirmExit, setConfirmExit] = useState(false);
+
+  const requestLogout = () => {
+    setMobileOpen(false);
+    setConfirmLogout(true);
+  };
+
+  const confirmAndLogout = () => {
+    setConfirmLogout(false);
+    onLogout();
+  };
+
+  // Android hardware back button: first press asks "هل تريد الخروج؟",
+  // second press (while the dialog is open) exits the app.
+  useEffect(() => {
+    let listener: { remove: () => void } | null = null;
+    try {
+      if (Capacitor.isNativePlatform()) {
+        CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+          if (!canGoBack) {
+            setConfirmExit((prev) => {
+              if (prev) {
+                try { CapacitorApp.exitApp(); } catch { /* ignore */ }
+              }
+              return true;
+            });
+          }
+        }).then((h) => { listener = h; }).catch(() => {});
+      }
+    } catch { /* ignore */ }
+    return () => { try { listener?.remove(); } catch { /* ignore */ } };
+  }, []);
 
   const handleTabClick = (tab: TabId) => {
     onTabChange(tab);
@@ -138,7 +174,7 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
               </div>
             </div>
             <button
-              onClick={onLogout}
+              onClick={requestLogout}
               className="p-2 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/50 transition-all"
               title="تسجيل خروج"
             >
@@ -192,7 +228,7 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
                 </div>
               </div>
               <button
-                onClick={onLogout}
+                onClick={requestLogout}
                 className="p-2 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/50 transition-all"
               >
                 <LogOut className="w-5 h-5" />
@@ -231,6 +267,70 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
             })}
           </div>
         </nav>
+      )}
+      {confirmLogout && createPortal(
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+          onClick={() => setConfirmLogout(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl p-6 text-center animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-red-50 dark:bg-red-950/50 flex items-center justify-center mb-4">
+              <LogOut className="w-7 h-7 text-red-500" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-1">تسجيل الخروج؟</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">هل أنت متأكد من الخروج من التطبيق؟</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmLogout(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={confirmAndLogout}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white font-semibold shadow-md transition-all"
+              >
+                خروج
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {confirmExit && createPortal(
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+          onClick={() => setConfirmExit(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl p-6 text-center animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 dark:bg-amber-950/50 flex items-center justify-center mb-4">
+              <LogOut className="w-7 h-7 text-amber-500" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-1">الخروج من التطبيق؟</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">هل أنت متأكد من الخروج من التطبيق؟</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmExit(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+              >
+                البقاء
+              </button>
+              <button
+                onClick={() => { try { CapacitorApp.exitApp(); } catch { setConfirmExit(false); } }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white font-semibold shadow-md transition-all"
+              >
+                خروج
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </header>
   );

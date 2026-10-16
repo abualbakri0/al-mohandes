@@ -20,7 +20,7 @@ import {
 import { getQueue, dequeue, enqueue, type QueuedOp } from '@/lib/offlineStore';
 
 export type FlushFailure = { label: string; reason: string };
-export type FlushResult = { done: number; failed: number; failures: FlushFailure[] };
+export type FlushResult = { done: number; failed: number; failures: FlushFailure[]; dropped?: number };
 export type SaveResult = { status: 'saved' | 'queued'; op: QueuedOp | null };
 
 /** Maximum size (bytes) of a PDF the developer may queue offline. */
@@ -37,6 +37,12 @@ function dataUrlToFile(dataUrl: string, fileName: string): File {
 
 async function executeOp(op: QueuedOp): Promise<void> {
   const p = op.payload ?? {};
+  // Guard against malformed/stale queued payloads (e.g. stored by an older
+  // app version): fail with a PGRST-tagged message so flushQueue() drops the
+  // poison op instead of retrying — and nagging — forever.
+  if (op.action === 'update' && (!p.id || typeof p.fields !== 'object' || Object.keys(p.fields ?? {}).length === 0)) {
+    throw new Error('PGRST invalid queued update payload (missing id/fields)');
+  }
   switch (op.table) {
     case 'lectures':
       if (op.action === 'insert') {
@@ -141,7 +147,23 @@ async function executeOp(op: QueuedOp): Promise<void> {
 
 let flushInFlight: Promise<FlushResult> | null = null;
 
-/** Publish every queued op in FIFO order. Keeps failures queued for retry. */
+/**
+ * True for failures that will NEVER succeed on retry (bad payload, deleted
+ * row, RLS/permission denial, table/column missing from the schema cache...).
+ * Keeping such "poison" ops queued makes flushQueue() fail forever and nag
+ * the user with "تعذر نشر" on every launch.
+ *
+ * `code` is the PostgREST error code when available (e.g. PGRST205 =
+ * "table not found in the schema cache" — usually an unapplied migration).
+ * supabase-js exposes it beside `message`, not inside it, so it is checked
+ * separately: the message alone reads like a plain English sentence.
+ */
+function isPermanentFailure(message: string, code?: string): boolean {
+  if (code && /^PGRST20[45]$/.test(code)) return true;
+  return /invalid input syntax for type uuid|violates (foreign key|not-null|unique|check)|column .* does not exist|could not find the (table|column)|in the schema cache|permission denied|not allowed|row-level security|JWT|PGRST|must be a valid uuid|reference insert needs file/i.test(message);
+}
+
+/** Publish every queued op in FIFO order. Keeps retryable failures queued; drops poison ops. */
 export function flushQueue(): Promise<FlushResult> {
   // If startup and the reconnect handler both request a flush, share the same
   // result instead of letting one caller mistake an in-progress flush for an
@@ -152,6 +174,7 @@ export function flushQueue(): Promise<FlushResult> {
     const queue = getQueue();
     let done = 0;
     let failed = 0;
+    let dropped = 0;
     const failures: FlushFailure[] = [];
     for (const op of queue) {
       try {
@@ -159,15 +182,28 @@ export function flushQueue(): Promise<FlushResult> {
         dequeue(op.qid);
         done += 1;
       } catch (error) {
-        failed += 1;
         const reason = error instanceof Error
           ? error.message
           : String((error as { message?: string })?.message ?? error ?? 'خطأ غير معروف');
+        // PostgREST puts the error code (e.g. PGRST205) outside `message`.
+        const code = typeof (error as { code?: unknown })?.code === 'string'
+          ? (error as { code?: string }).code
+          : undefined;
+        if (isPermanentFailure(reason, code)) {
+          // Poison op (update of a deleted row, malformed payload, table not
+          // in the schema cache…): drop it so it stops failing forever. The
+          // server is already the source of truth, so a refresh will restore
+          // the correct picture.
+          dequeue(op.qid);
+          dropped += 1;
+          continue;
+        }
+        failed += 1;
         failures.push({ label: op.label, reason });
         // keep in queue for next retry
       }
     }
-    return { done, failed, failures };
+    return { done, failed, failures, dropped };
   })().finally(() => {
     flushInFlight = null;
   });

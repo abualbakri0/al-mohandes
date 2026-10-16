@@ -29,6 +29,7 @@ import { useOfficialRealtime } from '@/hooks/useOfficialRealtime';
 import { useLectureReminders } from '@/hooks/useLectureReminders';
 import { requestNativePermission, onNativeNotificationTap } from '@/lib/nativeNotifications';
 import { bindPushDisplay, initPush, setPushDepartment } from '@/lib/push';
+import { initWebPush, setWebPushDepartment } from '@/lib/webPush';
 import { setAppBadge, clearAppBadge } from '@/lib/appBadge';
 import { useTheme } from '@/hooks/useTheme';
 import { useToday } from '@/hooks/useToday';
@@ -116,7 +117,7 @@ function App() {
       wasOfflineRef.current = false;
       (async () => {
         if (pendingCount() > 0) {
-          const { done, failed, failures } = await flushQueue();
+          const { done, failed, failures, dropped = 0 } = await flushQueue();
           if (done > 0) {
             showToast(
               'عاد الاتصال — تم النشر',
@@ -131,6 +132,13 @@ function App() {
               : `${failed} عملية ما زالت في قائمة الانتظار`;
             showToast('تعذر نشر بعض العمليات', details, 'warning', undefined, undefined, undefined, 10000);
           }
+          if (dropped > 0) {
+            showToast(
+              'تم تجاهل عمليات عالقة',
+              `${dropped} عملية لم تعد قابلة للتنفيذ وحُذفت من قائمة الانتظار`,
+              'info'
+            );
+          }
         }
         refreshAll();
       })();
@@ -142,7 +150,7 @@ function App() {
     if (!isOnline || !user) return;
     if (pendingCount() === 0) return;
     let cancelled = false;
-    flushQueue().then(({ done, failed, failures }) => {
+    flushQueue().then(({ done, failed, failures, dropped = 0 }) => {
       if (cancelled) return;
       if (done > 0) {
         showToast('تم النشر', `تم نشر ${done} عملية محفوظة من قبل`, 'success');
@@ -158,6 +166,13 @@ function App() {
           undefined,
           undefined,
           10000
+        );
+      }
+      if (dropped > 0) {
+        showToast(
+          'تم تجاهل عمليات عالقة',
+          `${dropped} عملية لم تعد قابلة للتنفيذ وحُذفت من قائمة الانتظار`,
+          'info'
         );
       }
     });
@@ -190,6 +205,20 @@ function App() {
       if (tab) handleTabChangeRef.current(tab);
     });
     return off;
+  }, []);
+
+  // Tapping a Web Push notification (PWA install) — the Service Worker posts
+  // this message when the user clicks the tray notification.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMsg = (event: MessageEvent) => {
+      const data = event.data as { type?: string; tab?: string } | undefined;
+      if (data?.type === 'mohanndes-notif-click' && data.tab) {
+        handleTabChangeRef.current(data.tab as TabId);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg);
   }, []);
 
   useEffect(() => {
@@ -331,9 +360,12 @@ function App() {
   });
   useEffect(() => {
     void initPush();
+    // PWA/website installs use Web Push instead of FCM (no-op on native).
+    void initWebPush();
   }, []);
   useEffect(() => {
     setPushDepartment(userDepartment, isDeveloper);
+    setWebPushDepartment(userDepartment, isDeveloper);
   }, [userDepartment, isDeveloper]);
 
   // Scheduled native reminders: 60min + 15min before lectures, evening summary 19:00

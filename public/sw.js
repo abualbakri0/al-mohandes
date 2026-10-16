@@ -17,6 +17,53 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+/* ---------------------------------------------------------------
+ * Web Push (إشعارات الموقع المثبّت كتطبيق/PWA)
+ * يستقبل رسائل الخادم (Edge Function push-notify) حتى لو كان
+ * التطبيق/المتصفح مغلقًا تمامًا — يعرضها النظام نفسه في الشريط.
+ * إذا كان النافذة ظاهرة (foreground) نتجاهل لأن الإشعار الداخلي
+ * (Realtime) يعرض toast بالفعل — نفس سلوك تطبيق الأندرويد.
+ * ------------------------------------------------------------- */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || 'المهندس';
+  event.waitUntil((async () => {
+    try {
+      const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      if (windowClients.some((c) => c.visibilityState === 'visible')) return;
+    } catch { /* ignore — show the notification anyway */ }
+    await self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      dir: 'rtl',
+      lang: 'ar',
+      // One notification per source row — redeliveries collapse.
+      tag: data.table && data.id ? `${data.table}-${data.id}` : title,
+      data: { tab: data.tab || 'notifications', urgent: data.urgent === 'true' },
+      vibrate: data.urgent === 'true' ? [300, 100, 300, 100, 300] : [200, 100, 200],
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const tab = (event.notification.data || {}).tab;
+  event.waitUntil((async () => {
+    const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windowClients) {
+      try { client.postMessage({ type: 'mohanndes-notif-click', tab }); } catch { /* ignore */ }
+      if ('focus' in client) return client.focus();
+    }
+    return self.clients.openWindow('./');
+  })());
+});
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;

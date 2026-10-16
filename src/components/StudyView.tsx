@@ -297,6 +297,7 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
           () => addStudyTask(fields.subject, fields.task_type, fields.day, fields.start_time, fields.end_time, fields.department, fields.notes)
         );
         if (res.status === 'queued') showToast('تم الحفظ محليًا', 'ستُنشر المهمة تلقائيًا عند عودة الاتصال', 'info');
+        else showToast('تمت الإضافة بنجاح', `تم نشر مهمة «${fields.subject}» وسيصل إشعار للجميع`, 'success');
       }
       resetForm();
       await load();

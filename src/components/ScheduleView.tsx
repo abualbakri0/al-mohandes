@@ -187,6 +187,8 @@ export default function ScheduleView({ isDeveloper, department }: Props) {
         );
         if (res.status === 'queued') {
           showToast('تم الحفظ محليًا', 'ستُنشر المحاضرة تلقائيًا عند عودة الاتصال', 'info');
+        } else {
+          showToast('تمت الإضافة بنجاح', `تم نشر المحاضرة «${subjectValue}» وسيصل إشعار للجميع`, 'success');
         }
       }
       resetForm();

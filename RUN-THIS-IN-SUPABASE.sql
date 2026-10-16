@@ -115,15 +115,25 @@ CREATE POLICY "delete_user_study_progress" ON user_study_progress FOR DELETE
 -- ────────────────────────────────────────────────────────────────────────────
 --  3) ترحيل البيانات الموجودة (إن وُجدت) من الجدولين القديمين.
 --     ON CONFLICT DO NOTHING حتى لا نفقد بيانات إن نُفِّذ الترحيل مرتين.
+--
+--     ⚠️ الجداول القديمة تخزّن المفاتيح كـ text وليس uuid، لذلك نُصرِّف كل
+--     عمود بنوعه الصحيح (::uuid / ::boolean / ::timestamptz) ونتجاهل أي صف
+--     يحمل معرّفاً غير صالح بفحص نمط UUID (Regex). بدون هذا التحويل تفشل
+--     العملية بخطأ: 42804 column "user_id" is of type uuid but expression
+--     is of type text.
 -- ────────────────────────────────────────────────────────────────────────────
 INSERT INTO user_assignment_progress (user_id, assignment_id, completed, updated_at)
-SELECT user_id, assignment_id, completed, updated_at
+SELECT user_id::uuid, assignment_id::uuid, completed::boolean, updated_at::timestamptz
 FROM assignment_progress
+WHERE user_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  AND assignment_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 ON CONFLICT (user_id, assignment_id) DO NOTHING;
 
 INSERT INTO user_study_progress (user_id, task_id, completed, updated_at)
-SELECT user_id, task_id, completed, updated_at
+SELECT user_id::uuid, task_id::uuid, completed::boolean, updated_at::timestamptz
 FROM study_progress
+WHERE user_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  AND task_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 ON CONFLICT (user_id, task_id) DO NOTHING;
 
 -- ────────────────────────────────────────────────────────────────────────────
@@ -139,7 +149,7 @@ UPDATE study_tasks SET completed = false WHERE completed = true;
 --   SELECT count(*) FROM study_tasks WHERE completed = true;
 
 -- ============================================================
---  5) ���� ����� �� ���� �������� (��� ��������)
+-- 5) عمود الشرح الاختياري على مهمة المذاكرة (نص اختياري يظهر للطالب).
 -- ============================================================
 -- Optional free-text explanation on a study task ("الشرح").
 -- The teacher/developer writes a short explanation of what to study for that
@@ -150,4 +160,38 @@ ALTER TABLE study_tasks ADD COLUMN IF NOT EXISTS notes text;
 
 COMMENT ON COLUMN study_tasks.notes IS
   'شرح المهمة (اختياري) — يظهر للطالب أسفل اسم المادة.';
+
+-- ============================================================
+-- 6) جدول اشتراكات Web Push (PWA / تثبيت المتصفح)
+--    يُمكّن دالة push-notify Edge Function من إرسال إشعارات
+--    حتى عندما يكون المتصفح / التطبيق المثبّت مغلقاً.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  department TEXT,
+  is_developer BOOLEAN NOT NULL DEFAULT false,
+  alerts_enabled BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE web_push_subscriptions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "anon_select_web_push" ON web_push_subscriptions;
+CREATE POLICY "anon_select_web_push" ON web_push_subscriptions FOR SELECT
+TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "anon_insert_web_push" ON web_push_subscriptions;
+CREATE POLICY "anon_insert_web_push" ON web_push_subscriptions FOR INSERT
+TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "anon_update_web_push" ON web_push_subscriptions;
+CREATE POLICY "anon_update_web_push" ON web_push_subscriptions FOR UPDATE
+TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "anon_delete_web_push" ON web_push_subscriptions;
+CREATE POLICY "anon_delete_web_push" ON web_push_subscriptions FOR DELETE
+TO anon, authenticated USING (true);
 
