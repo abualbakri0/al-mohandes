@@ -4,6 +4,7 @@ import {
   requestNativePermission,
   isNativePermissionGranted,
 } from '@/lib/nativeNotifications';
+import { initWebPush } from '@/lib/webPush';
 
 const DISMISS_KEY = 'mohanndes_notif_prompt_dismissed';
 
@@ -33,6 +34,9 @@ export default function NotificationPermissionPrompt() {
     try {
       const granted = await requestNativePermission();
       if (granted) {
+        // PWA/website: create the Web Push subscription now that permission
+        // exists (no-op on the native app).
+        void initWebPush();
         setVisible(false);
       } else {
         setDenied(true);

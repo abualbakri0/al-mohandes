@@ -62,6 +62,21 @@ function isMeaningfulUpdate(table: string, oldRow: Record<string, unknown>, newR
   return fields.some((f) => oldRow[f] !== newRow[f]);
 }
 
+// Weekday names indexed by JS Date#getDay() (0 = الأحد) — mirrors DAYS in
+// @/lib/supabase (which starts at السبت).
+const DAYS_BY_JS_INDEX = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+// Study-task alerts (new/edit) are ONLY shown on the task's actual day —
+// requirement: adding/editing a task days ahead must not pop up on students'
+// devices. Known weekday labels are compared strictly; unknown/empty labels
+// fall back to "show" so a data-format change can never silently kill alerts.
+function isStudyDayToday(day: string | null | undefined): boolean {
+  if (!day) return true;
+  const normalized = day.trim();
+  if (!DAYS_BY_JS_INDEX.includes(normalized)) return true;
+  return normalized === DAYS_BY_JS_INDEX[new Date().getDay()];
+}
+
 export function useOfficialRealtime({ department, isDeveloper, showToast, goToTab }: Props) {
   const deptRef = useRef(department);
   const devRef = useRef(isDeveloper);
@@ -82,15 +97,17 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       tab: TabId,
       urgent = false,
       evt: 'insert' | 'update' | 'delete' = 'insert',
+      durationMs?: number,
     ) =>
-      emitOfficialEvent({ table, id, title, body, tab, urgent, evt, showToast: toastRef.current, goToTab: goRef.current });
+      emitOfficialEvent({ table, id, title, body, tab, urgent, evt, durationMs, showToast: toastRef.current, goToTab: goRef.current });
 
     const channel = supabase
       .channel('official-notify-all')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
         const row = payload.new as AppNotification;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('notifications', row.id)) return;
+        // Developer self-adds must ALSO alert on this device (no self-suppression for INSERT).
+        consumeSelfWrite('notifications', row.id);
         const urgent = row.notification_type === 'postponement';
         emitNow('notifications', row.id, `${urgent ? '🚨 ' : '🔔 '}${row.title}`, row.message, 'notifications', urgent);
       })
@@ -102,16 +119,13 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         const urgent = row.notification_type === 'postponement';
         emitNow('notifications', row.id, `${urgent ? '🚨 ' : '🔕 '}${row.title}`, `تم تعديل الإشعار — ${row.message}`, 'notifications', urgent, 'update');
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'notifications' }, (payload) => {
-        const oldRow = payload.old as AppNotification;
-        if (!oldRow?.id) return;
-        if (consumeSelfWrite('notifications', oldRow.id)) return;
-        emitNow('notifications', oldRow.id, '🗑️ حُذف إشعار', 'أُزال إشعار من القائمة', 'notifications', false, 'delete');
-      })
+      // NOTE: DELETE popups are intentionally disabled (requirement: never
+      // alert users when something is deleted). No handler is registered for
+      // DELETE events on any table — neither here nor on the study channel.
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'lectures' }, (payload) => {
         const row = payload.new as Lecture;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('lectures', row.id)) return;
+        consumeSelfWrite('lectures', row.id);
         const timeRange = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
         const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} من ${timeRange}`;
         const teacher = row.teacher ? ` — م.${row.teacher}` : '';
@@ -129,16 +143,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         const place = row.location ? ` — القاعة ${row.location}` : '';
         emitNow('lectures', row.id, '✏️ تعديل محاضرة', `${row.subject}${when}${teacher}${place}`, 'schedule', false, 'update');
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lectures' }, (payload) => {
-        const oldRow = payload.old as Lecture;
-        if (!oldRow?.id) return;
-        if (consumeSelfWrite('lectures', oldRow.id)) return;
-        emitNow('lectures', oldRow.id, '🗑️ حُذفت محاضرة', 'أُزيلت محاضرة من الجدول', 'schedule', false, 'delete');
-      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'assignments' }, (payload) => {
         const row = payload.new as Assignment;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('assignments', row.id)) return;
+        consumeSelfWrite('assignments', row.id);
         emitNow('assignments', row.id, '📝 تكليف جديد', `${row.subject}: ${row.title} — التسليم ${row.due_date}`, 'assignments');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'assignments' }, (payload) => {
@@ -148,16 +156,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         if (!isMeaningfulUpdate('assignments', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         emitNow('assignments', row.id, '✏️ تعديل تكليف', `${row.subject}: ${row.title} — التسليم ${row.due_date}`, 'assignments', false, 'update');
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'assignments' }, (payload) => {
-        const oldRow = payload.old as Assignment;
-        if (!oldRow?.id) return;
-        if (consumeSelfWrite('assignments', oldRow.id)) return;
-        emitNow('assignments', oldRow.id, '🗑️ حُذف تكليف', 'أُزيل تكليف من القائمة', 'assignments', false, 'delete');
-      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'exams' }, (payload) => {
         const row = payload.new as Exam;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('exams', row.id)) return;
+        consumeSelfWrite('exams', row.id);
         const examTime = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
         const examPlace = row.location ? ` — القاعة ${row.location}` : '';
         const examTeacher = row.teacher ? ` — م.${row.teacher}` : '';
@@ -173,16 +175,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         const examTeacher = row.teacher ? ` — م.${row.teacher}` : '';
         emitNow('exams', row.id, '✏️ تعديل اختبار', `${row.subject} — يوم ${row.exam_date} من ${examTime}${examPlace}${examTeacher}`, 'exams', false, 'update');
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'exams' }, (payload) => {
-        const oldRow = payload.old as Exam;
-        if (!oldRow?.id) return;
-        if (consumeSelfWrite('exams', oldRow.id)) return;
-        emitNow('exams', oldRow.id, '🗑️ حُذف اختبار', 'أُزيل اختبار من القائمة', 'exams', false, 'delete');
-      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reference_materials' }, (payload) => {
         const row = payload.new as ReferenceMaterial;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('reference_materials', row.id)) return;
+        consumeSelfWrite('reference_materials', row.id);
         emitNow('references', row.id, '📖 مرجع جديد', row.title, 'references');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reference_materials' }, (payload) => {
@@ -192,16 +188,41 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         if (!isMeaningfulUpdate('reference_materials', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         emitNow('references', row.id, '✏️ تعديل مرجع', row.title, 'references', false, 'update');
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reference_materials' }, (payload) => {
-        const oldRow = payload.old as ReferenceMaterial;
-        if (!oldRow?.id) return;
-        if (consumeSelfWrite('reference_materials', oldRow.id)) return;
-        emitNow('references', oldRow.id, '🗑️ حُذف مرجع', 'أُزيل مرجع من القائمة', 'references', false, 'delete');
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registrations' }, (payload) => {
+        if (!devRef.current) return;
+        const row = payload.new as Registration;
+        emitNow('registrations', row.id, '🚨 مسجل جديد — يتطلب المراجعة', `${shortName(row.name)} — ${row.phone}`, 'registrations', true, 'insert', 10000);
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'feedback_messages' }, (payload) => {
+        if (!devRef.current) return;
+        const row = payload.new as FeedbackMessage;
+        emitNow('feedback', row.id, '💬 رسالة تواصل جديدة', `من ${shortName(row.sender_name)}: ${row.subject}`, 'feedback', true, 'insert', 10000);
+      })
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime] official channel failed:', status, err);
+        }
+      });
+
+    // ============================================================
+    // ISOLATED channel for study_tasks — CRITICAL, do not merge back
+    // into the channel above.
+    // History: when study_tasks was missing from the `supabase_realtime`
+    // publication, subscribing to it HERE poisoned the whole shared channel
+    // (server rejects the join: "Unable to subscribe to changes with given
+    // parameters…") and silently dropped every other postgres_changes event —
+    // killing ALL popups for everyone. The migration has since been applied,
+    // but this isolation stays as a permanent guard: a future publication/RLS
+    // mistake on one table can only silence its own alerts, never the rest.
+    // ============================================================
+    const studyChannel = supabase
+      .channel('official-notify-study-tasks')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'study_tasks' }, (payload) => {
         const row = payload.new as StudyTask;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('study_tasks', row.id)) return;
+        consumeSelfWrite('study_tasks', row.id);
+        // Only alert on the task's actual day (requirement).
+        if (!isStudyDayToday(row.day)) return;
         const kind = row.task_type === 'review' ? 'مراجعة' : 'مذاكرة';
         emitNow('study_tasks', row.id, '📚 مهمة جديدة', `${row.subject} (${kind}) — يوم ${row.day} الساعة ${formatTime12(row.start_time)}`, 'study');
       })
@@ -210,32 +231,19 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         if (!matchesDept(row.department, deptRef.current)) return;
         if (consumeSelfWrite('study_tasks', row.id)) return;
         if (!isMeaningfulUpdate('study_tasks', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
+        // Only alert on the task's actual day (requirement).
+        if (!isStudyDayToday(row.day)) return;
         emitNow('study_tasks', row.id, '✏️ تعديل مهمة', `${row.subject} — يوم ${row.day} الساعة ${formatTime12(row.start_time)}`, 'study', false, 'update');
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'study_tasks' }, (payload) => {
-        const oldRow = payload.old as StudyTask;
-        if (!oldRow?.id) return;
-        if (consumeSelfWrite('study_tasks', oldRow.id)) return;
-        emitNow('study_tasks', oldRow.id, '🗑️ حُذفت مهمة', 'أُزيلت مهمة من القائمة', 'study', false, 'delete');
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registrations' }, (payload) => {
-        if (!devRef.current) return;
-        const row = payload.new as Registration;
-        emitNow('registrations', row.id, '👤 مسجل جديد', `${shortName(row.name)} — ${row.phone}`, 'registrations');
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'feedback_messages' }, (payload) => {
-        if (!devRef.current) return;
-        const row = payload.new as FeedbackMessage;
-        emitNow('feedback', row.id, '💬 رسالة تواصل جديدة', `من ${shortName(row.sender_name)}: ${row.subject}`, 'feedback');
       })
       .subscribe((status, err) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[realtime] official channel failed:', status, err);
+          console.warn('[realtime] study_tasks channel failed:', status, err);
         }
       });
 
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(studyChannel);
     };
   }, []);
 }

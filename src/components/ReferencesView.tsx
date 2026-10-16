@@ -257,6 +257,7 @@ export default function ReferencesView({ isDeveloper, department }: Props) {
       const { path, size } = await uploadReferenceFile(file);
       setUploadProgress('جاري حفظ البيانات...');
       await addReference(fields.title, fields.description, path, size, fields.department);
+      showToast('تمت الإضافة بنجاح', `تم نشر المرجع «${fields.title}» وسيصل إشعار للجميع`, 'success');
       resetForm();
       await load();
     } catch (err) {

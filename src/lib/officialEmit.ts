@@ -16,6 +16,7 @@ export type ToastFn = (
   icon?: typeof import('lucide-react').Bell,
   actionLabel?: string,
   onAction?: () => void,
+  durationMs?: number,
 ) => void;
 
 let pruneDone = false;
@@ -62,10 +63,12 @@ export type EmitArgs = {
   evt?: 'insert' | 'update' | 'delete';
   /** Suppress badge increment (e.g. when re-delivering an already-seen event). */
   skipBadge?: boolean;
+  /** Optional toast duration override (ms) — used for strict alerts. */
+  durationMs?: number;
 };
 
 export async function emitOfficialEvent(args: EmitArgs): Promise<void> {
-  const { table, id, title, body, tab, showToast, goToTab, urgent = false, evt = 'insert', skipBadge = false } = args;
+  const { table, id, title, body, tab, showToast, goToTab, urgent = false, evt = 'insert', skipBadge = false, durationMs } = args;
   const preferences = getNotificationPrefs().contentAlerts;
   if (!preferences) return;
   const seen = markSeen(table, id, evt);
@@ -76,7 +79,8 @@ export async function emitOfficialEvent(args: EmitArgs): Promise<void> {
   }
   try {
     // urgent (postponement / alerts) → warning toast, 5s; otherwise info, 3s.
-    showToast(title, body, urgent ? 'warning' : 'info', undefined, 'عرض', () => goToTab(tab));
+    // durationMs allows strict alerts (e.g. new registration) to stay longer.
+    showToast(title, body, urgent ? 'warning' : 'info', undefined, 'عرض', () => goToTab(tab), durationMs);
   } catch (toastError) {
     console.warn('[notify] toast failed', toastError);
   }

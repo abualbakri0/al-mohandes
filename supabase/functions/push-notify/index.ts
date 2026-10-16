@@ -175,6 +175,115 @@ function isUnregistered(text: string): boolean {
   return text.includes('UNREGISTERED') || text.includes('registration-token-not-registered');
 }
 
+// ---------- Web Push (RFC 8291 / RFC 8188 — aes128gcm) ----------
+const WEBPUSH_VAPID_PUBLIC_KEY = 'BAgNlZmy2X85JwCi85A1RxAU7i2Th9uGWCm0oHr-4OeOHDFyWXDVrDU6X7yrKc5ds-H0xzmgovSddjVYswjsqLg';
+const WEBPUSH_SUBJECT = 'mailto:webpush@mohanndes.app';
+
+function wpB64urlEnc(buf: Uint8Array): string {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < buf.length; i += chunk) bin += String.fromCharCode(...buf.subarray(i, i + chunk));
+  return btoa(bin).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function wpB64urlDec(str: string): Uint8Array {
+  const padding = '='.repeat((4 - (str.length % 4)) % 4);
+  const base64 = (str + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function hkdfExpand(ikmKey: CryptoKey, salt: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
+  const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, ikmKey, length);
+  return new Uint8Array(bits);
+}
+
+async function buildVapidJwt(audience: string, vapidPrivateKeyPkcs8B64: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'ES256', typ: 'JWT' };
+  const payload = { aud: audience, exp: now + 43200, sub: WEBPUSH_SUBJECT };
+  const unsigned = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`;
+  const padded = vapidPrivateKeyPkcs8B64.match(/.{1,64}/g)!.join('\n');
+  const pem = `-----BEGIN PRIVATE KEY-----\n${padded}\n-----END PRIVATE KEY-----`;
+  const der = pemToDer(pem);
+  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(unsigned));
+  return `${unsigned}.${b64url(new Uint8Array(signature))}`;
+}
+
+async function encryptWebPushPayload(
+  clientKeyB64: string,
+  authB64: string,
+  plaintext: string,
+): Promise<{ encrypted: Uint8Array; salt: Uint8Array; serverPublicKeyRaw: Uint8Array }> {
+  const clientKeyRaw = wpB64urlDec(clientKeyB64);
+  const auth = wpB64urlDec(authB64);
+  const clientPublicKey = await crypto.subtle.importKey('raw', clientKeyRaw, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+  const serverKeyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+  const serverPublicKeyRaw = new Uint8Array(await crypto.subtle.exportKey('raw', serverKeyPair.publicKey));
+  const sharedSecretKey = await crypto.subtle.deriveKey({ name: 'ECDH', public: clientPublicKey }, serverKeyPair.privateKey, { name: 'AES-GCM', length: 128 }, true, ['encrypt', 'decrypt']);
+  const sharedSecret = new Uint8Array(await crypto.subtle.exportKey('raw', sharedSecretKey));
+  const ikm = new Uint8Array(sharedSecret.length + auth.length);
+  ikm.set(sharedSecret);
+  ikm.set(auth, sharedSecret.length);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const ikmKey = await crypto.subtle.importKey('raw', ikm, { name: 'HKDF' }, false, []);
+  const context = new Uint8Array(clientKeyRaw.length + serverPublicKeyRaw.length);
+  context.set(clientKeyRaw);
+  context.set(serverPublicKeyRaw, clientKeyRaw.length);
+  const infoPrefix = new TextEncoder().encode('Content-Encoding: aes128gcm');
+  const cekInfo = new Uint8Array(infoPrefix.length + context.length + 2);
+  cekInfo.set(infoPrefix);
+  cekInfo.set(context, infoPrefix.length);
+  cekInfo.set([0x00, 0x10], infoPrefix.length + context.length);
+  const cekBits = await hkdfExpand(ikmKey, salt, cekInfo, 128);
+  const cekKey = await crypto.subtle.importKey('raw', cekBits, { name: 'AES-GCM' }, false, ['encrypt']);
+  const nonceInfo = new Uint8Array(infoPrefix.length + context.length + 2);
+  nonceInfo.set(infoPrefix);
+  nonceInfo.set(context, infoPrefix.length);
+  nonceInfo.set([0x00, 0x0C], infoPrefix.length + context.length);
+  const nonce = await hkdfExpand(ikmKey, salt, nonceInfo, 96);
+  const data = new TextEncoder().encode(plaintext);
+  const pt = new Uint8Array(data.length + 1);
+  pt.set(data);
+  pt[data.length] = 0x02;
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: new Uint8Array(0) }, cekKey, pt);
+  return { encrypted: new Uint8Array(encrypted), salt, serverPublicKeyRaw };
+}
+
+async function sendWebPush(
+  endpoint: string,
+  p256dh: string,
+  auth: string,
+  payload: string,
+  vapidPrivateKeyPkcs8B64: string,
+): Promise<{ ok: boolean; status: number; gone: boolean }> {
+  try {
+    const { encrypted, salt, serverPublicKeyRaw } = await encryptWebPushPayload(p256dh, auth, payload);
+    const aud = new URL(endpoint).origin;
+    const jwt = await buildVapidJwt(aud, vapidPrivateKeyPkcs8B64);
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      body: encrypted,
+      headers: {
+        'Encryption': `salt=${wpB64urlEnc(salt)}`,
+        'Crypto-Key': `p256dh=${wpB64urlEnc(serverPublicKeyRaw)}`,
+        'Content-Encoding': 'aes128gcm',
+        'Authorization': `Bearer ${jwt}`,
+        'Content-Type': 'application/octet-stream',
+        TTL: '86400',
+        Urgency: 'normal',
+      },
+    });
+    return { ok: res.status === 201, status: res.status, gone: res.status === 410 || res.status === 404 || res.status === 403 };
+  } catch (e) {
+    console.error(`[webpush] send error: ${String(e)}`);
+    return { ok: false, status: 0, gone: false };
+  }
+}
+
 // ---------- HTTP handler ----------
 
 serve(async (req: Request) => {
@@ -237,6 +346,11 @@ serve(async (req: Request) => {
   // Defensive: some secret stores turn real newlines into literal \n.
   serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
 
+  const vapidPrivateKeyPkcs8B64 = Deno.env.get('WEBPUSH_VAPID_PRIVATE_KEY');
+  if (!vapidPrivateKeyPkcs8B64) {
+    console.warn('[push-notify] WEBPUSH_VAPID_PRIVATE_KEY not set — Web Push will be skipped');
+  }
+
   // Content source 1: Database Webhook (INSERT event)
   let content: { title: string; body: string; tab: string; urgent: boolean } | null = null;
   let dept: string | null = null;
@@ -277,8 +391,37 @@ serve(async (req: Request) => {
   if (error) {
     return new Response(JSON.stringify({ error: error.message }), { status: 500 });
   }
-  if (!tokens || tokens.length === 0) {
-    return new Response(JSON.stringify({ ok: true, sent: 0, failed: 0, removed: 0 }), { status: 200 });
+  // Also query Web Push subscriptions (PWA / browser installs).
+  // Same department / alerts filtering as FCM tokens.
+  let webSubs: { endpoint: string; p256dh: string; auth: string; department: string | null; alerts_enabled: boolean; is_developer: boolean }[] = [];
+  if (vapidPrivateKeyPkcs8B64) {
+    let wquery = supabase
+      .from('web_push_subscriptions')
+      .select('endpoint, p256dh, auth, department, alerts_enabled, is_developer')
+      .eq('alerts_enabled', true);
+    if (sourceTable === 'registrations') {
+      wquery = wquery.eq('is_developer', true);
+    }
+    if (sourceTable !== 'registrations' && dept && dept !== 'مشترك') {
+      wquery = wquery.or(`department.eq.${dept},department.is.null`);
+    }
+    const { data: wdata, error: werror } = await wquery;
+    if (werror) {
+      console.warn('[push-notify] web_push_subscriptions query failed', werror);
+    } else {
+      webSubs = (wdata ?? []).map((r: any) => ({
+        endpoint: r.endpoint,
+        p256dh: r.p256dh,
+        auth: r.auth,
+        department: r.department,
+        alerts_enabled: r.alerts_enabled,
+        is_developer: r.is_developer,
+      }));
+    }
+  }
+
+  if ((!tokens || tokens.length === 0) && (!webSubs || webSubs.length === 0)) {
+    return new Response(JSON.stringify({ ok: true, sent: 0, failed: 0, removed: 0, webSent: 0, webFailed: 0, webRemoved: 0 }), { status: 200 });
   }
 
   let token: string;
@@ -344,8 +487,44 @@ serve(async (req: Request) => {
     await supabase.from('push_tokens').delete().eq('token', dead);
   }
 
+  // ---------- Web Push sending (PWA / browser installs) ----------
+  let webSent = 0;
+  let webFailed = 0;
+  const deadWebSubs: string[] = [];
+
+  if (vapidPrivateKeyPkcs8B64 && webSubs.length > 0) {
+    for (const sub of webSubs) {
+      const res = await sendWebPush(sub.endpoint, sub.p256dh, sub.auth, JSON.stringify({
+        title: content.title,
+        body: content.body,
+        tab: content.tab,
+        urgent: content.urgent,
+      }), vapidPrivateKeyPkcs8B64);
+      if (res.ok) {
+        webSent += 1;
+      } else {
+        webFailed += 1;
+        if (res.gone) deadWebSubs.push(sub.endpoint);
+      }
+    }
+  }
+
+  // Prune web push subscriptions the push service reports as gone.
+  for (const dead of deadWebSubs) {
+    await supabase.from('web_push_subscriptions').delete().eq('endpoint', dead);
+  }
+
   return new Response(
-    JSON.stringify({ ok: true, sent, failed, removed: deadTokens.length, title: content.title }),
+    JSON.stringify({
+      ok: true,
+      sent,
+      failed,
+      removed: deadTokens.length,
+      webSent,
+      webFailed,
+      webRemoved: deadWebSubs.length,
+      title: content.title,
+    }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   );
 });

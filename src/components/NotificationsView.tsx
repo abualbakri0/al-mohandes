@@ -141,6 +141,7 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
           () => addNotification(fields.title, fields.message, fields.notification_type, fields.department)
         );
         if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُرسل الإشعار تلقائيًا عند عودة الاتصال', 'info');
+        else showToast('تمت الإضافة بنجاح', `تم نشر الإشعار «${fields.title}» وسيصل للجميع`, 'success');
       }
       resetForm();
       await load();

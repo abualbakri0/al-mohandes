@@ -38,12 +38,28 @@ function nextDateForDay(dayName: string, timeHHmm: string): Date | null {
   return d;
 }
 
+// Deterministic schedule ids: re-scheduling the SAME reminder reuses the same
+// id, so even if two generations briefly overlap, the second schedule REPLACES
+// the first instead of stacking a duplicate on top of it.
+function stableId(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) % 2000000000 + 1;
+}
+
 export function useLectureReminders(department: Department | null, userName?: string | null) {
   const deptRef = useRef(department);
   deptRef.current = department;
   const nameRef = useRef(userName);
   nameRef.current = userName;
   const scheduledIds = useRef<number[]>([]);
+  // Monotonic generation: stale reschedule runs (StrictMode double-mount,
+  // overlapping interval ticks, dept changes) must not push ids into the
+  // NEW generation, or cancel() would miss them and duplicates would fire.
+  const generation = useRef(0);
 
   /** Reminder title: just "تذكير" (per request). */
   const reminderTitle = (): string => 'تذكير';
@@ -57,12 +73,25 @@ export function useLectureReminders(department: Department | null, userName?: st
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
+    // Serialize reschedule runs: an in-flight fetch/schedule must not overlap
+    // the next tick, otherwise both runs schedule the same reminders and the
+    // user gets 2+ system notifications for one reminder.
+    let rescheduling = false;
+    // Bump generation so any stale in-flight run aborts instead of pushing
+    // ids that the new run's cancel() can no longer reach.
+    generation.current += 1;
+    const myGen = generation.current;
 
     const reschedule = async () => {
+      if (rescheduling) return;
+      rescheduling = true;
+      try {
       const prefs = getNotificationPrefs();
       // Clear old schedules first
       if (scheduledIds.current.length > 0) {
         await cancelNativeReminders(scheduledIds.current);
+        // Abandoned by a newer generation? Don't wipe its fresh ids.
+        if (myGen !== generation.current || cancelled) return;
         scheduledIds.current = [];
       }
       if (!prefs.lectureReminders && !prefs.eveningSummary && !prefs.studyMotivation && !prefs.assignmentReminders) return;
@@ -85,7 +114,7 @@ export function useLectureReminders(department: Department | null, userName?: st
       } catch {
         return;
       }
-      if (cancelled) return;
+      if (cancelled || myGen !== generation.current) return;
       const items = lectures.filter((l) => !l.is_holiday);
       const now = new Date();
 
@@ -105,6 +134,7 @@ export function useLectureReminders(department: Department | null, userName?: st
           const t60 = new Date(start.getTime() - 60 * 60 * 1000);
           if (t60.getTime() > now.getTime() + 60_000) {
             const id = await scheduleNativeReminder({
+              id: stableId(`lec|${lec.day}|${lec.start_time}|${lec.subject}`),
               title: reminderTitle(),
               body: reminderBody(`لديك محاضرة ${base} — من ${timeRange} (يوم ${lec.day})`),
               at: t60,
@@ -138,6 +168,7 @@ export function useLectureReminders(department: Department | null, userName?: st
             .filter((l) => l.day === tomorrowName)
             .sort((a, b) => a.start_time.localeCompare(b.start_time));
           const id = await scheduleNativeReminder({
+            id: stableId(`evening|${evening.toDateString()}`),
             title: reminderTitle(),
             body: reminderBody(
               tomorrowLecs.length > 0
@@ -178,6 +209,7 @@ export function useLectureReminders(department: Department | null, userName?: st
             .map((t) => `${t.subject} (${t.task_type === 'review' ? 'مراجعة' : 'مذاكرة'})`)
             .join('، ');
           const id = await scheduleNativeReminder({
+            id: stableId(`study|${at16.toDateString()}|${targetDay}`),
             title: `مهام ${targetDay} 📚`,
             body: reminderBody(`مهام اليوم: ${list}`),
             at: at16,
@@ -203,6 +235,7 @@ export function useLectureReminders(department: Department | null, userName?: st
           // Only within the next 8 days (keeps the queue small).
           if (at.getTime() - now.getTime() > 8 * 24 * 3600 * 1000) continue;
           const id = await scheduleNativeReminder({
+            id: stableId(`assign|${a.id}|${a.due_date}`),
             title: 'تذكير بتسليم تكليف ⏰',
             body: reminderBody(`غدًا تسليم تكليف ${a.subject}: ${a.title}`),
             at,
@@ -229,6 +262,7 @@ export function useLectureReminders(department: Department | null, userName?: st
           const examPlace = e.location ? ` — القاعة ${e.location}` : '';
           const examTeacher = e.teacher ? ` — م.${e.teacher}` : '';
           const id = await scheduleNativeReminder({
+            id: stableId(`exam|${e.id}|${e.exam_date}`),
             title: 'تذكير باختبار ⏰',
             body: reminderBody(`غدًا اختبار ${e.subject} — من ${examTime}${examPlace}${examTeacher} (يوم ${e.exam_date})`),
             at,
@@ -237,6 +271,9 @@ export function useLectureReminders(department: Department | null, userName?: st
           });
           scheduledIds.current.push(id);
         }
+      }
+      } finally {
+        rescheduling = false;
       }
     };
 

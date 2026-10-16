@@ -121,6 +121,7 @@ export default function ExamsView({ isDeveloper, department }: Props) {
           () => addExam(fields.subject, fields.exam_date, fields.start_time, fields.end_time, fields.location, fields.department, fields.teacher)
         );
         if (res.status === 'queued') showToast('تم الحفظ محليًا', 'سيُنشر الاختبار تلقائيًا عند عودة الاتصال', 'info');
+        else showToast('تمت الإضافة بنجاح', `تم نشر اختبار «${fields.subject}» وسيصل إشعار للجميع`, 'success');
       }
       resetForm();
       await load();

@@ -221,6 +221,7 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
           () => addAssignment(fields.subject, fields.title, fields.request_date, fields.due_date, fields.department)
         );
         if (res.status === 'queued') showToast('تم الحفظ محليًا', 'ستُنشر المهمة تلقائيًا عند عودة الاتصال', 'info');
+        else showToast('تمت الإضافة بنجاح', `تم نشر التكليف «${fields.title}» وسيصل إشعار للجميع`, 'success');
       }
       resetForm();
       await load();
