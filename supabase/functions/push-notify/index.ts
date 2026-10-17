@@ -446,41 +446,56 @@ serve(async (req: Request) => {
   let failed = 0;
   const deadTokens: string[] = [];
 
-  for (const row of tokens) {
-    const res = await fetch(
-      `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: {
-            token: row.token as string,
-            notification: { title: content.title, body: content.body },
-            data,
-            android: {
-              priority: 'high',
-              notification: {
-                channel_id: channelId,
-                // Tints the small icon + app name so the tray matches app brand.
-                color: notifyColor,
-                default_vibrate_timings: true,
-                default_sound: true,
-                visibility: 1,
+  // Send to all devices CONCURRENTLY — a sequential loop would make the
+  // dispatch time grow linearly with the number of devices (0.3s each).
+  const results = await Promise.all(
+    tokens.map(async (row) => {
+      try {
+        const res = await fetch(
+          `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: {
+                token: row.token as string,
+                notification: { title: content.title, body: content.body },
+                data,
+                android: {
+                  priority: 'high',
+                  notification: {
+                    channel_id: channelId,
+                    // Tints the small icon + app name so the tray matches app brand.
+                    color: notifyColor,
+                    default_vibrate_timings: true,
+                    default_sound: true,
+                    visibility: 1,
+                  },
+                },
               },
-            },
+            }),
           },
-        }),
-      },
-    );
-    if (res.ok) {
+        );
+        if (res.ok) {
+          return { ok: true, dead: false };
+        }
+        const text = await res.text();
+        console.error(`[push-notify] send failed: ${res.status} ${text}`);
+        return { ok: false, dead: isUnregistered(text) };
+      } catch (e) {
+        console.error(`[push-notify] send error: ${String(e)}`);
+        return { ok: false, dead: false };
+      }
+    }),
+  );
+  results.forEach((r, i) => {
+    if (r.ok) {
       sent += 1;
     } else {
       failed += 1;
-      const text = await res.text();
-      console.error(`[push-notify] send failed: ${res.status} ${text}`);
-      if (isUnregistered(text)) deadTokens.push(row.token as string);
+      if (r.dead) deadTokens.push(tokens[i].token as string);
     }
-  }
+  });
 
   // Prune tokens FCM reports as gone so retries stay fast.
   for (const dead of deadTokens) {
@@ -493,18 +508,24 @@ serve(async (req: Request) => {
   const deadWebSubs: string[] = [];
 
   if (vapidPrivateKeyPkcs8B64 && webSubs.length > 0) {
-    for (const sub of webSubs) {
-      const res = await sendWebPush(sub.endpoint, sub.p256dh, sub.auth, JSON.stringify({
-        title: content.title,
-        body: content.body,
-        tab: content.tab,
-        urgent: content.urgent,
-      }), vapidPrivateKeyPkcs8B64);
-      if (res.ok) {
+    // Also concurrent, same reason as the FCM loop above.
+    const webResults = await Promise.all(
+      webSubs.map(async (sub) => {
+        const res = await sendWebPush(sub.endpoint, sub.p256dh, sub.auth, JSON.stringify({
+          title: content.title,
+          body: content.body,
+          tab: content.tab,
+          urgent: content.urgent,
+        }), vapidPrivateKeyPkcs8B64);
+        return { endpoint: sub.endpoint, ...res };
+      }),
+    );
+    for (const r of webResults) {
+      if (r.ok) {
         webSent += 1;
       } else {
         webFailed += 1;
-        if (res.gone) deadWebSubs.push(sub.endpoint);
+        if (r.gone) deadWebSubs.push(r.endpoint);
       }
     }
   }
