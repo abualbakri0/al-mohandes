@@ -16,7 +16,8 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase, type Department } from '@/lib/supabase';
 import { getNotificationPrefs } from '@/lib/notificationPrefs';
 import { CHANNEL_UPDATES, CHANNEL_ALERTS } from '@/lib/nativeNotifications';
-import { emitOfficialEvent, type ToastFn } from '@/lib/officialEmit';
+import { emitOfficialEvent, markSeen, type ToastFn } from '@/lib/officialEmit';
+import { consumeSelfWrite } from '@/lib/api';
 import type { TabId } from '@/components/Navbar';
 
 export type PushRegistration = {
@@ -117,6 +118,12 @@ function handleForegroundPush(n: { data?: unknown; notification?: { title?: stri
     const table = data.table;
     const id = data.id;
     if (!table || !id || !displayBridge) return;
+    // Own edit echoed back as FCM (race: this copy can beat Realtime) —
+    // suppress and mark seen so the Realtime copy is suppressed too.
+    if (data.evt === 'update' && consumeSelfWrite(table, id)) {
+      markSeen(table, id, 'update');
+      return;
+    }
     void emitOfficialEvent({
       table,
       id,
@@ -124,6 +131,8 @@ function handleForegroundPush(n: { data?: unknown; notification?: { title?: stri
       body: n.notification?.body ?? '',
       tab: (data.tab || 'notifications') as TabId,
       urgent: data.urgent === 'true',
+      // UPDATE pushes dedupe against the Realtime UPDATE popup (per-evt key).
+      evt: data.evt === 'update' ? 'update' : 'insert',
       showToast: displayBridge.showToast,
       goToTab: displayBridge.goToTab,
     });

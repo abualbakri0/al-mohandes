@@ -21,11 +21,19 @@ export type ToastFn = (
 
 let pruneDone = false;
 
+// Two deliveries of the SAME event (Realtime + FCM foreground) arrive within
+// seconds of each other — window them. Repeat edits of the same row minutes
+// apart DO alert again (permanent keys used to mute a row forever after its
+// first edit, which would have made UPDATE push nearly useless).
+const DEDUP_WINDOW_MS = 2 * 60_000;
+
 export function markSeen(table: string, id: string, evt: 'insert' | 'update' | 'delete' = 'insert'): boolean {
   try {
     const k = `mohanndes_notified_${table}_${id}${evt === 'insert' ? '' : `_${evt}`}`;
-    if (localStorage.getItem(k)) return false;
-    localStorage.setItem(k, '1');
+    const now = Date.now();
+    const prev = Number(localStorage.getItem(k) ?? '0');
+    if (prev > 0 && now - prev < DEDUP_WINDOW_MS) return false;
+    localStorage.setItem(k, String(now));
     // Prune old dedup keys so localStorage never fills up (which would make
     // setItem throw and — worse — could silently block future notifications).
     // Keeps only the 400 most recent keys; runs at most once per session.

@@ -109,12 +109,115 @@ export function markUnseen(tab: TabId): number {
   return next[tab];
 }
 
-/** Zero the counter for a section (user opened it). */
+/** Zero the counter for a section (user opened it) + remember the visit time. */
 export function clearSection(tab: TabId): void {
+  recordSectionVisit(tab);
   const all = read();
   if (!all[tab]) return;
   delete all[tab];
   write(all);
+}
+
+// ============================================================
+// Boot-time badge seeding: markUnseen() only increments while the app is
+// RUNNING — content arriving while the app was closed/killed left badges
+// empty on next launch. seedSectionBadges() reconciles every section against
+// rows created since the user last OPENED that section, so cold starts show
+// correct counts too. First-ever run baselines to "now" (never floods badges
+// with historical content).
+// ============================================================
+
+function visitKey(tab: TabId): string {
+  return `mohanndes_last_visit_${tab}${accountSuffix()}`;
+}
+
+/** Persist "user has seen this section" time (called by clearSection). */
+export function recordSectionVisit(tab: TabId): void {
+  try {
+    localStorage.setItem(visitKey(tab), new Date().toISOString());
+  } catch {
+    /* ignore */
+  }
+}
+
+// Weekday names indexed by JS Date#getDay() — mirrors the day gate used for
+// study-task alerts (only badge tasks that would have alerted: their day).
+const DAYS_BY_JS_INDEX = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+function countableStudyDay(day: string | null | undefined): boolean {
+  if (!day) return true;
+  const normalized = day.trim();
+  if (!DAYS_BY_JS_INDEX.includes(normalized)) return true;
+  return normalized === DAYS_BY_JS_INDEX[new Date().getDay()];
+}
+
+/** Raise a section badge to `count` (never lowers a live markUnseen count). */
+function raiseSectionBadge(tab: TabId, count: number): void {
+  if (count <= 0) return;
+  const all = read();
+  const existing = all[tab] ?? 0;
+  if (count <= existing) return;
+  write({ ...all, [tab]: count });
+}
+
+/**
+ * Reconcile section badges with rows created since each section's last visit.
+ * Call on cold start and on app resume. Content tables are department-scoped
+ * exactly like fetches; feedback/registrations are developer-only (all rows).
+ */
+export function seedSectionBadges(department: Department | null, isDeveloper: boolean): void {
+  const contentSections: Array<[TabId, string]> = [
+    ['schedule', 'lectures'],
+    ['assignments', 'assignments'],
+    ['study', 'study_tasks'],
+    ['exams', 'exams'],
+    ['references', 'reference_materials'],
+  ];
+  const devSections: Array<[TabId, string]> = isDeveloper
+    ? [
+        ['feedback', 'feedback_messages'],
+        ['registrations', 'registrations'],
+      ]
+    : [];
+
+  for (const [tab, table] of [...contentSections, ...devSections]) {
+    try {
+      const since = localStorage.getItem(visitKey(tab));
+      if (!since) {
+        // First run with this feature: baseline = now so pre-existing rows
+        // never appear as "unseen".
+        localStorage.setItem(visitKey(tab), new Date().toISOString());
+        continue;
+      }
+      const cols =
+        table === 'feedback_messages' || table === 'registrations'
+          ? 'id'
+          : table === 'study_tasks'
+            ? 'id, department, day'
+            : 'id, department';
+      let query = supabase
+        .from(table)
+        .select(cols)
+        .gt('created_at', since)
+        .limit(200);
+      const scoped = table !== 'feedback_messages' && table !== 'registrations';
+      if (scoped) {
+        const filter = departmentFilter(department ?? undefined);
+        if (filter) query = query.or(filter);
+      }
+      void query.then(({ data, error }) => {
+        if (error || !data || data.length === 0) return;
+        const rows = data as Array<{ day?: string | null }>;
+        const count =
+          table === 'study_tasks'
+            ? rows.filter((r) => countableStudyDay(r.day)).length
+            : rows.length;
+        raiseSectionBadge(tab, count);
+      });
+    } catch {
+      /* non-fatal — badges just stay as they were */
+    }
+  }
 }
 
 /** Snapshot of all section counters. */

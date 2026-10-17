@@ -85,12 +85,17 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
     setMobileOpen(false);
   };
 
-  // Badge count for a given tab: legacy sources first (notifications list +
-  // registrations), then the reactive per-section counter.
+  // Badge count for a given tab: max of the legacy sources (notifications
+  // list + registrations live tracker) and the per-section counter, so a
+  // boot-time seed and a live markUnseen never disagree.
   const badgeFor = (id: TabId): number => {
-    if (id === 'notifications') return notificationCount;
-    if (id === 'registrations') return registrationsCount;
-    return sectionBadges[id] ?? 0;
+    const legacy =
+      id === 'notifications'
+        ? notificationCount
+        : id === 'registrations'
+          ? registrationsCount
+          : 0;
+    return Math.max(legacy, sectionBadges[id] ?? 0);
   };
 
   const visibleItems = NAV_ITEMS.filter((item) => !item.devOnly || isDeveloper);
@@ -128,13 +133,7 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
                   {item.label}
                   {badgeFor(item.id) > 0 && (
                     <span
-                      className={`absolute -top-1 -left-1 text-white text-[10px] font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center animate-scale-in ${
-                        item.id === 'notifications'
-                          ? 'bg-red-500'
-                          : item.id === 'registrations'
-                            ? 'bg-amber-500'
-                            : 'bg-teal-500 dark:bg-teal-500'
-                      }`}
+                      className={`absolute -top-1 -left-1 text-white text-[10px] font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center animate-scale-in bg-red-500`}
                     >
                       {badgeFor(item.id) > 99 ? '99+' : badgeFor(item.id)}
                     </span>
@@ -251,13 +250,7 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
                   {item.label}
                   {badgeFor(item.id) > 0 && (
                     <span
-                      className={`mr-auto text-white text-[10px] font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center ${
-                        item.id === 'notifications'
-                          ? 'bg-red-500'
-                          : item.id === 'registrations'
-                            ? 'bg-amber-500'
-                            : 'bg-teal-500 dark:bg-teal-500'
-                      }`}
+                      className={`mr-auto text-white text-[10px] font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center bg-red-500`}
                     >
                       {badgeFor(item.id) > 99 ? '99+' : badgeFor(item.id)}
                     </span>

@@ -125,6 +125,37 @@ function formatTime12(t: unknown): string {
 function buildContent(
   table: string,
   record: PushRecord,
+  evt: 'INSERT' | 'UPDATE' = 'INSERT',
+): { title: string; body: string; tab: string; urgent: boolean } | null {
+  // Edit popups mirror the foreground Realtime wording (src/hooks/useOfficialRealtime.ts).
+  const EDIT_TITLES: Record<string, string> = {
+    notifications: '✏️ تعديل إشعار',
+    lectures: '✏️ تعديل محاضرة',
+    assignments: '✏️ تعديل تكليف',
+    exams: '✏️ تعديل اختبار',
+    reference_materials: '✏️ تعديل مرجع',
+  };
+  const base = buildContentFor(table, record);
+  if (!base) return null;
+  if (evt === 'UPDATE') {
+    // Match the Realtime UPDATE wording exactly so foreground dedup
+    // (markSeen) is the only thing deciding which copy shows.
+    if (table === 'notifications') {
+      const urgent = record.notification_type === 'postponement';
+      return {
+        ...base,
+        title: `${urgent ? '🚨 ' : '🔕 '}${String(record.title ?? 'إشعار')}`,
+        body: `تم تعديل الإشعار — ${base.body}`,
+      };
+    }
+    return { ...base, title: EDIT_TITLES[table] ?? `✏️ ${base.title}` };
+  }
+  return base;
+}
+
+function buildContentFor(
+  table: string,
+  record: PushRecord,
 ): { title: string; body: string; tab: string; urgent: boolean } | null {
   switch (table) {
     case 'notifications': {
@@ -169,6 +200,25 @@ function buildContent(
     default:
       return null;
   }
+}
+
+// Mirrors isMeaningfulUpdate() in src/hooks/useOfficialRealtime.ts: only
+// alert on an UPDATE if a content field actually moved (ignores no-op saves
+// and per-user progress columns like `completed`).
+const CONTENT_FIELDS: Record<string, string[]> = {
+  lectures: ['subject', 'day', 'start_time', 'end_time', 'location', 'department', 'is_holiday', 'teacher'],
+  assignments: ['subject', 'title', 'request_date', 'due_date', 'department'],
+  exams: ['subject', 'exam_date', 'start_time', 'end_time', 'location', 'department', 'teacher'],
+  notifications: ['title', 'message', 'notification_type', 'department'],
+  reference_materials: ['title', 'description', 'department'],
+};
+
+function isMeaningfulUpdate(table: string, oldRow: PushRecord, newRow: PushRecord): boolean {
+  const fields = CONTENT_FIELDS[table];
+  if (!fields) return true;
+  const oldKeys = Object.keys(oldRow ?? {});
+  if (oldKeys.length <= 1) return true; // old row carries just the id → can't diff
+  return fields.some((f) => oldRow[f] !== newRow[f]);
 }
 
 function isUnregistered(text: string): boolean {
@@ -305,6 +355,7 @@ serve(async (req: Request) => {
     type?: string;
     table?: string;
     record?: PushRecord;
+    old_record?: PushRecord;
     title?: string;
     body?: string;
     department?: string | null;
@@ -351,17 +402,21 @@ serve(async (req: Request) => {
     console.warn('[push-notify] WEBPUSH_VAPID_PRIVATE_KEY not set — Web Push will be skipped');
   }
 
-  // Content source 1: Database Webhook (INSERT event)
+  // Content source 1: Database Webhook (INSERT or UPDATE event)
   let content: { title: string; body: string; tab: string; urgent: boolean } | null = null;
   let dept: string | null = null;
   let sourceTable = 'notifications';
   let recordId = '';
+  const evt: 'INSERT' | 'UPDATE' = body.type === 'UPDATE' ? 'UPDATE' : 'INSERT';
 
   if (body.record && body.table) {
-    if (body.type && body.type !== 'INSERT') {
+    if (body.type && body.type !== 'INSERT' && body.type !== 'UPDATE') {
       return new Response(JSON.stringify({ skipped: true, reason: `ignored event ${body.type}` }), { status: 200 });
     }
-    content = buildContent(body.table, body.record);
+    if (evt === 'UPDATE' && body.old_record && !isMeaningfulUpdate(body.table, body.old_record, body.record)) {
+      return new Response(JSON.stringify({ skipped: true, reason: 'no meaningful change' }), { status: 200 });
+    }
+    content = buildContent(body.table, body.record, evt);
     if (!content) {
       return new Response(JSON.stringify({ skipped: true, reason: `table ${body.table} not pushed` }), { status: 200 });
     }
@@ -440,6 +495,9 @@ serve(async (req: Request) => {
     id: recordId,
     tab: content.tab,
     urgent: String(content.urgent),
+    // Lets the foreground handler dedupe UPDATE pushes with the Realtime
+    // UPDATE popup (markSeen uses a per-evt key: insert vs update).
+    evt: evt === 'UPDATE' ? 'update' : 'insert',
   };
 
   let sent = 0;

@@ -19,7 +19,7 @@ import InstallPrompt from '@/components/InstallPrompt';
 import PullToRefresh from '@/components/PullToRefresh';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 import { useToast } from '@/components/ToastProvider';
-import { fetchSettings, checkRegistration, useSectionBadges, clearSection } from '@/lib/api';
+import { fetchSettings, checkRegistration, useSectionBadges, clearSection, seedSectionBadges } from '@/lib/api';
 import { flushQueue } from '@/lib/offlineSync';
 import { pendingCount } from '@/lib/offlineStore';
 import { useNightAlerts } from '@/hooks/useNightAlerts';
@@ -187,6 +187,22 @@ function App() {
     localStorage.getItem('is_dev') === 'true';
 
   const userDepartment: Department | null = isDeveloper ? null : user?.department ?? null;
+
+  // Reconcile badges with content that arrived while the app was CLOSED
+  // (markUnseen only runs while alive). First run baselines per section to
+  // "now", so this never floods badges with historical rows.
+  useEffect(() => {
+    if (!user) return;
+    seedSectionBadges(userDepartment, isDeveloper);
+    // Also re-reconcile when the app returns to the foreground after a pause.
+    const onFocus = () => seedSectionBadges(userDepartment, isDeveloper);
+    window.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('visibilitychange', onFocus);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [user, userDepartment, isDeveloper]);
 
   const nightAlert = useNightAlerts(userDepartment ?? undefined);
 

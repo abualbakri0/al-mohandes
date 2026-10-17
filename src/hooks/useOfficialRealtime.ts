@@ -18,7 +18,7 @@ import {
 } from '@/lib/supabase';
 import { shortName, consumeSelfWrite } from '@/lib/api';
 import { formatTime12, formatTimeRange } from '@/lib/time';
-import { emitOfficialEvent, type ToastFn } from '@/lib/officialEmit';
+import { emitOfficialEvent, markSeen, type ToastFn } from '@/lib/officialEmit';
 import type { TabId } from '@/components/Navbar';
 
 type Props = {
@@ -114,7 +114,12 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications' }, (payload) => {
         const row = payload.new as AppNotification;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('notifications', row.id)) return;
+        if (consumeSelfWrite('notifications', row.id)) {
+          // Own edit: suppress BOTH paths — mark seen so the parallel FCM
+          // copy of this UPDATE can't pop up either.
+          markSeen('notifications', row.id, 'update');
+          return;
+        }
         if (!isMeaningfulUpdate('notifications', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         const urgent = row.notification_type === 'postponement';
         emitNow('notifications', row.id, `${urgent ? '🚨 ' : '🔕 '}${row.title}`, `تم تعديل الإشعار — ${row.message}`, 'notifications', urgent, 'update');
@@ -135,7 +140,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lectures' }, (payload) => {
         const row = payload.new as Lecture;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('lectures', row.id)) return;
+        if (consumeSelfWrite('lectures', row.id)) {
+          markSeen('lectures', row.id, 'update');
+          return;
+        }
         if (!isMeaningfulUpdate('lectures', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         const timeRange = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
         const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} من ${timeRange}`;
@@ -152,7 +160,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'assignments' }, (payload) => {
         const row = payload.new as Assignment;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('assignments', row.id)) return;
+        if (consumeSelfWrite('assignments', row.id)) {
+          markSeen('assignments', row.id, 'update');
+          return;
+        }
         if (!isMeaningfulUpdate('assignments', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         emitNow('assignments', row.id, '✏️ تعديل تكليف', `${row.subject}: ${row.title} — التسليم ${row.due_date}`, 'assignments', false, 'update');
       })
@@ -168,7 +179,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'exams' }, (payload) => {
         const row = payload.new as Exam;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('exams', row.id)) return;
+        if (consumeSelfWrite('exams', row.id)) {
+          markSeen('exams', row.id, 'update');
+          return;
+        }
         if (!isMeaningfulUpdate('exams', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         const examTime = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
         const examPlace = row.location ? ` — القاعة ${row.location}` : '';
@@ -184,7 +198,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reference_materials' }, (payload) => {
         const row = payload.new as ReferenceMaterial;
         if (!matchesDept(row.department, deptRef.current)) return;
-        if (consumeSelfWrite('reference_materials', row.id)) return;
+        if (consumeSelfWrite('reference_materials', row.id)) {
+          markSeen('reference_materials', row.id, 'update');
+          return;
+        }
         if (!isMeaningfulUpdate('reference_materials', payload.old as Record<string, unknown>, row as unknown as Record<string, unknown>)) return;
         emitNow('references', row.id, '✏️ تعديل مرجع', row.title, 'references', false, 'update');
       })
