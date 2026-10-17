@@ -81,37 +81,22 @@ export function setPushDepartment(dept: Department | null, isDeveloper = false):
 }
 
 /** Upsert token + prefs so the Edge Function can target/filter this device. */
-async function uploadPushToken(retry = 1): Promise<void> {
+async function uploadPushToken(): Promise<void> {
   const token = getStoredPushToken();
   if (!token) return;
-  // NOTE: `is_developer` exists only on DBs where migration
-  // 20261014120000 was applied. Send it, but retry WITHOUT it if the
-  // server rejects the column — otherwise new installs can never register
-  // and background push silently stops for them.
-  const basePayload = {
-    token,
-    department,
-    platform: 'android',
-    alerts_enabled: getNotificationPrefs().contentAlerts,
-    last_seen_at: new Date().toISOString(),
-  };
   try {
-    let { error } = await supabase.from('push_tokens').upsert(
-      { ...basePayload, is_developer: isDeveloperDevice },
+    const { error } = await supabase.from('push_tokens').upsert(
+      {
+        token,
+        department,
+        is_developer: isDeveloperDevice,
+        platform: 'android',
+        alerts_enabled: getNotificationPrefs().contentAlerts,
+        last_seen_at: new Date().toISOString(),
+      },
       { onConflict: 'token' },
     );
-    if (error && /is_developer|column|schema cache/i.test(error.message)) {
-      const fallback = await supabase.from('push_tokens').upsert(basePayload, { onConflict: 'token' });
-      error = fallback.error;
-    }
-    if (error) {
-      console.warn('[push] token upload failed', error);
-      // Offline at boot is common: retry once after a delay so the token
-      // is not lost and background push keeps working after kill.
-      if (retry > 0) {
-        setTimeout(() => void uploadPushToken(retry - 1), 15000);
-      }
-    }
+    if (error) console.warn('[push] token upload failed', error.message);
   } catch (e) {
     console.warn('[push] token upload failed', e);
   }

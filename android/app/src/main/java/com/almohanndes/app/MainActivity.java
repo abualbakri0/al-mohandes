@@ -19,8 +19,6 @@ import java.security.MessageDigest;
  *   DIFFERENT key (the classic "stolen app" scenario), the check fails and
  *   the app closes immediately.
  * - A "debuggable" release build is also refused.
- * - Device integrity checks (root, emulator, ADB, unknown sources) are also
- *   enforced so the app refuses to run on compromised devices.
  * - Debug builds pass an empty pin → check skipped, so development is
  *   unaffected.
  */
@@ -33,12 +31,6 @@ public class MainActivity extends BridgeActivity {
             Log.e(TAG, "Integrity check failed (repackaged or debuggable release) — aborting");
             finish();
             return;
-        }
-        // Device integrity check — log threats but do NOT block launch.
-        // This avoids false positives on normal user devices (ADB on, unknown sources enabled, etc.).
-        // Re-enable hard enforcement later via BuildConfig.DEVICE_CHECK_ENFORCED if needed.
-        if (!DeviceIntegrityChecker.isDeviceSafe(this)) {
-            Log.w(TAG, "Device integrity threat detected (non-fatal): " + DeviceIntegrityChecker.assessThreat(this));
         }
         super.onCreate(savedInstanceState);
     }
