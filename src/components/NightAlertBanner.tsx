@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { CalendarDays, Bell, X, Sun, Coffee } from 'lucide-react';
+import { CalendarDays, Bell, X, Sun, Coffee, ClipboardList, FileText } from 'lucide-react';
 import type { NightAlert } from '@/hooks/useNightAlerts';
-import { formatTimeRange } from '@/lib/time';
+import { formatTimeRange, formatTime12 } from '@/lib/time';
 
 type Props = {
   alert: NightAlert;
@@ -15,6 +15,15 @@ export default function NightAlertBanner({ alert, userName, onClose }: Props) {
   if (dismissed) return null;
 
   const isHoliday = alert.type === 'holiday';
+  // Cached alerts from older app versions may predate these fields.
+  const dueAssignments = alert.assignments ?? [];
+  const dayExams = alert.exams ?? [];
+  const hasLectures = alert.lectures.length > 0;
+  const title = isHoliday
+    ? 'إجازة غداً'
+    : hasLectures
+      ? `محاضرات غداً — ${alert.dayName}`
+      : `برنامج غداً — ${alert.dayName}`;
 
   return (
     <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-96 z-50 animate-fade-in-up mb-[env(safe-area-inset-bottom,0px)]">
@@ -30,9 +39,7 @@ export default function NightAlertBanner({ alert, userName, onClose }: Props) {
                 {isHoliday ? <Coffee className="w-5 h-5 text-white" /> : <Bell className="w-5 h-5 text-teal-300" />}
               </div>
               <div>
-                <p className="text-white font-bold text-sm">
-                  {isHoliday ? 'إجازة غداً' : `محاضرات غداً — ${alert.dayName}`}
-                </p>
+                <p className="text-white font-bold text-sm">{title}</p>
               </div>
             </div>
             <button
@@ -50,18 +57,45 @@ export default function NightAlertBanner({ alert, userName, onClose }: Props) {
             </p>
             {isHoliday ? (
               <p className="leading-relaxed">
-                غداً يوم {alert.dayName} ولا توجد محاضرات في جدولك. استمتع بإجازتك واقضِ وقتاً في المراجعة إن أردت.
+                غداً يوم {alert.dayName} ولا يوجد شيء مبرمج في جدولك. استمتع بإجازتك واقضِ وقتاً في المراجعة إن أردت.
               </p>
             ) : (
-              <div className="space-y-1.5">
-                <p className="mb-2">لديك {alert.lectures.length} محاضرة غداً:</p>
-                {alert.lectures.map((lec, i) => (
-                  <div key={i} className="flex items-center gap-2 bg-white/10 rounded-lg px-3 py-2">
-                    <CalendarDays className="w-4 h-4 text-teal-300 flex-shrink-0" />
-                    <span className="font-medium">{lec.subject}</span>
-                    <span className="text-white/60 text-xs mr-auto">{formatTimeRange(lec.start_time, lec.end_time)}</span>
+              <div className="space-y-2">
+                {hasLectures && (
+                  <div className="space-y-1.5">
+                    <p className="mb-1">لديك {alert.lectures.length} محاضرة غداً:</p>
+                    {alert.lectures.map((lec, i) => (
+                      <div key={i} className="flex items-center gap-2 bg-white/10 rounded-lg px-3 py-2">
+                        <CalendarDays className="w-4 h-4 text-teal-300 flex-shrink-0" />
+                        <span className="font-medium">{lec.subject}</span>
+                        <span className="text-white/60 text-xs mr-auto">{formatTimeRange(lec.start_time, lec.end_time)}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+                {dueAssignments.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="mb-1">تسليم تكاليف ({dueAssignments.length}):</p>
+                    {dueAssignments.map((asg) => (
+                      <div key={asg.id} className="flex items-center gap-2 bg-amber-400/15 rounded-lg px-3 py-2">
+                        <ClipboardList className="w-4 h-4 text-amber-300 flex-shrink-0" />
+                        <span className="font-medium">{asg.subject}: {asg.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {dayExams.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="mb-1">اختبارات ({dayExams.length}):</p>
+                    {dayExams.map((exm) => (
+                      <div key={exm.id} className="flex items-center gap-2 bg-rose-400/15 rounded-lg px-3 py-2">
+                        <FileText className="w-4 h-4 text-rose-300 flex-shrink-0" />
+                        <span className="font-medium">{exm.subject}</span>
+                        <span className="text-white/60 text-xs mr-auto">{formatTime12(exm.start_time)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

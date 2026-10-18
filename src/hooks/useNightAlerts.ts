@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Lecture, Department } from '@/lib/supabase';
-import { fetchLectures } from '@/lib/api';
+import type { Lecture, Assignment, Exam, Department } from '@/lib/supabase';
+import { fetchLectures, fetchAssignments, fetchExams } from '@/lib/api';
 
 const DAY_MAP: Record<string, number> = {
   'الأحد': 0,
@@ -16,7 +16,18 @@ export type NightAlert = {
   type: 'lectures' | 'holiday';
   dayName: string;
   lectures: Lecture[];
+  /** Assignments whose due_date falls on tomorrow. */
+  assignments: Assignment[];
+  /** Exams scheduled for tomorrow. */
+  exams: Exam[];
 };
+
+/** 'YYYY-MM-DD' in LOCAL time (date columns compare as plain strings). */
+function isoDate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
 
 export function useNightAlerts(department?: Department): NightAlert | null {
   const [alert, setAlert] = useState<NightAlert | null>(null);
@@ -25,8 +36,9 @@ export function useNightAlerts(department?: Department): NightAlert | null {
     const now = new Date();
     const hour = now.getHours();
 
-    // Evening banner: show from 22:00 until midnight (the greeting says "مساء الخير").
-    if (hour < 22 || hour >= 24) {
+    // Evening banner: show from 21:00 (9 PM the previous evening) until
+    // midnight (the greeting says "مساء الخير").
+    if (hour < 21 || hour >= 24) {
       setAlert(null);
       return;
     }
@@ -41,20 +53,37 @@ export function useNightAlerts(department?: Department): NightAlert | null {
     }
 
     try {
-      const lectures = await fetchLectures(department);
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowIso = isoDate(tomorrow);
+
+      const [lectures, assignments, exams] = await Promise.all([
+        fetchLectures(department),
+        fetchAssignments(department),
+        fetchExams(department),
+      ]);
       const tomorrowItems = lectures.filter((l) => l.day === tomorrowDayName);
       const holidayItems = tomorrowItems.filter((l) => l.is_holiday);
       const lectureItems = tomorrowItems
         .filter((l) => !l.is_holiday)
         .sort((a, b) => a.start_time.localeCompare(b.start_time));
+      const dueItems = assignments
+        .filter((a) => a.due_date === tomorrowIso)
+        .sort((a, b) => a.subject.localeCompare(b.subject));
+      const examItems = exams
+        .filter((e) => e.exam_date === tomorrowIso)
+        .sort((a, b) => a.start_time.localeCompare(b.start_time));
 
-      const isHoliday = holidayItems.length > 0 && lectureItems.length === 0;
+      // "Free day" only when tomorrow has literally nothing (no lectures,
+      // no submissions, no exams) — an assignments-only day still shows
+      // the program banner.
+      const hasProgram = lectureItems.length > 0 || dueItems.length > 0 || examItems.length > 0;
+      const isHoliday = !hasProgram && holidayItems.length > 0;
+      const freeDay = !hasProgram && !isHoliday;
 
-      const alertData: NightAlert = isHoliday
-        ? { type: 'holiday', dayName: tomorrowDayName, lectures: [] }
-        : lectureItems.length > 0
-        ? { type: 'lectures', dayName: tomorrowDayName, lectures: lectureItems }
-        : { type: 'holiday', dayName: tomorrowDayName, lectures: [] };
+      const alertData: NightAlert = isHoliday || freeDay
+        ? { type: 'holiday', dayName: tomorrowDayName, lectures: [], assignments: [], exams: [] }
+        : { type: 'lectures', dayName: tomorrowDayName, lectures: lectureItems, assignments: dueItems, exams: examItems };
 
       setAlert(alertData);
       localStorage.setItem(todayKey, JSON.stringify(alertData));
