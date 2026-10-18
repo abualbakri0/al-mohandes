@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { CalendarDays, BookOpen, ClipboardList, Bell, Users, GraduationCap, Menu, X, LogOut, User as UserIcon, FileText, Shield, Settings, BookMarked, MessageSquare, Sun, Moon, UserCog, Sparkles } from 'lucide-react';
+import { CalendarDays, BookOpen, ClipboardList, Bell, Users, GraduationCap, Menu, X, LogOut, User as UserIcon, FileText, Shield, Settings, BookMarked, MessageSquare, Sun, Moon, UserCog, Sparkles, CalendarClock } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 
-export type TabId = 'schedule' | 'assignments' | 'study' | 'exams' | 'notifications' | 'references' | 'feedback' | 'registrations' | 'settings' | 'userSettings' | 'about';
+export type TabId = 'schedule' | 'daily' | 'assignments' | 'study' | 'exams' | 'notifications' | 'references' | 'feedback' | 'registrations' | 'settings' | 'userSettings' | 'about';
 
 const APP_NAME = 'المهندس';
 
@@ -17,6 +17,7 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'schedule', label: 'الجدول', icon: CalendarDays },
+  { id: 'daily', label: 'يومي', icon: CalendarClock },
   { id: 'assignments', label: 'التكاليف', icon: ClipboardList },
   { id: 'study', label: 'المذاكرة', icon: BookOpen },
   { id: 'exams', label: 'الاختبارات', icon: FileText },

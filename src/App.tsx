@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Navbar, { type TabId } from '@/components/Navbar';
 import ScheduleView from '@/components/ScheduleView';
+import DailyProgramView from '@/components/DailyProgramView';
 import AssignmentsView from '@/components/AssignmentsView';
 import StudyView from '@/components/StudyView';
 import ExamsView from '@/components/ExamsView';
@@ -504,6 +505,7 @@ function App() {
 
         <PullToRefresh key={`ptr-${activeTab}`} onRefresh={refreshAll}>
         {activeTab === 'schedule' && <ScheduleView key={refreshKey} isDeveloper={isDeveloper} department={userDepartment ?? undefined} />}
+        {activeTab === 'daily' && <DailyProgramView key={refreshKey} userId={user?.id} department={userDepartment ?? undefined} />}
         {activeTab === 'assignments' && <AssignmentsView key={refreshKey} isDeveloper={isDeveloper} userId={user?.id} department={userDepartment ?? undefined} />}
         {activeTab === 'study' && <StudyView key={refreshKey} isDeveloper={isDeveloper} userId={user?.id} department={userDepartment ?? undefined} />}
         {activeTab === 'exams' && <ExamsView key={refreshKey} isDeveloper={isDeveloper} department={userDepartment ?? undefined} />}
