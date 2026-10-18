@@ -356,7 +356,9 @@ function App() {
     nightAlert?.lectures ?? null,
     nightAlert?.dayName ?? null,
     nightAlert?.type === 'holiday',
-    !!user
+    !!user,
+    nightAlert?.assignments ?? [],
+    nightAlert?.exams ?? [],
   );
 
   // OFFICIAL realtime system notifications (WhatsApp-style in the status bar):

@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import type { Notification, Lecture } from '@/lib/supabase';
+import type { Notification, Lecture, Assignment, Exam } from '@/lib/supabase';
 import { playNotificationSound, vibrate } from '@/hooks/useNotificationSound';
 import { formatTime12 } from '@/lib/time';
 
@@ -46,7 +46,9 @@ export function useBrowserNotifications(
   nightLectures: Lecture[] | null,
   nightDayName: string | null,
   isHoliday: boolean,
-  enabled: boolean
+  enabled: boolean,
+  nightAssignments: Assignment[] = [],
+  nightExams: Exam[] = [],
 ) {
   const checkAndNotify = useCallback(() => {
     if (!enabled) return;
@@ -55,25 +57,35 @@ export function useBrowserNotifications(
     const now = new Date();
     const todayKey = `notif_${now.toDateString()}`;
 
-    // Night lecture/holiday notification (after 6pm)
+    // Evening program notification — same 21:00 window as the in-app banner.
     const hour = now.getHours();
-    if (hour >= 18 && hour < 23) {
+    if (hour >= 21 && hour < 24) {
       const nightKey = `night_notif_${todayKey}`;
       if (!localStorage.getItem(nightKey)) {
         if (isHoliday && nightDayName) {
           showInstantNotification('إجازة غداً', `غداً يوم ${nightDayName} — لا توجد محاضرات. استمتع بإجازتك!`);
           localStorage.setItem(nightKey, '1');
-        } else if (nightLectures && nightLectures.length > 0 && nightDayName) {
-          const lectureList = nightLectures.map((l) => `${l.subject} (${formatTime12(l.start_time)})`).join('، ');
+        } else if (nightDayName && nightLectures && (nightLectures.length > 0 || nightAssignments.length > 0 || nightExams.length > 0)) {
+          const parts: string[] = [];
+          if (nightLectures.length > 0) {
+            const lectureList = nightLectures.map((l) => `${l.subject} (${formatTime12(l.start_time)})`).join('، ');
+            parts.push(`${nightLectures.length} محاضرة: ${lectureList}`);
+          }
+          if (nightAssignments.length > 0) {
+            parts.push(`تسليم ${nightAssignments.length} تكليف: ${nightAssignments.map((a) => a.subject).join('، ')}`);
+          }
+          if (nightExams.length > 0) {
+            parts.push(`${nightExams.length} اختبار: ${nightExams.map((e) => e.subject).join('، ')}`);
+          }
           showInstantNotification(
-            `محاضرات غداً — ${nightDayName}`,
-            `لديك ${nightLectures.length} محاضرة غداً: ${lectureList}`
+            `برنامج غداً — ${nightDayName}`,
+            parts.join(' — ')
           );
           localStorage.setItem(nightKey, '1');
         }
       }
     }
-  }, [nightLectures, nightDayName, isHoliday, enabled]);
+  }, [nightLectures, nightDayName, isHoliday, enabled, nightAssignments, nightExams]);
 
   useEffect(() => {
     checkAndNotify();
