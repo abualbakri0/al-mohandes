@@ -13,17 +13,17 @@ const config: CapacitorConfig = {
       iconColor: '#0D9488',
     },
     SplashScreen: {
-      // Full branded splash (icon + "المهندس") on ALL Android versions.
-      // useDialog forces the plugin's own full-screen view instead of the
-      // Android 12+ native splash, which would crop the icon into a circle
-      // and hide the app name. CENTER keeps the whole image (no cropping).
-      launchShowDuration: 2500,
+      // الافتتاحية الواحدة فقط هي شاشة الويب (IntroScreen في App.tsx:
+      // اللوجو + المهندس + "صُنِعَ بشغف هندسي" لمدة 3 ثوانٍ مع Fade).
+      // لذلك نخفي شاشة البلجن الأصلية فوراً (مدة 0) حتى لا تظهر
+      // أي افتتاحية أخرى قبلها — فقط لون الخلفية أثناء تحميل WebView.
+      launchShowDuration: 0,
       launchAutoHide: true,
-      launchFadeOutDuration: 500,
+      launchFadeOutDuration: 0,
       backgroundColor: '#0A1929',
       androidScaleType: 'CENTER',
       androidSplashResourceName: 'splash',
-      useDialog: true,
+      useDialog: false,
       splashFullScreen: true,
       splashImmersive: false,
       showSpinner: false,

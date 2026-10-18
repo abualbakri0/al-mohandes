@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
-import { Plus, Pencil, Trash2, Loader2, ClipboardList, CheckCircle2, Circle, Calendar, AlertTriangle, Cpu, Zap, Users, Trophy, X } from 'lucide-react';
-import { DEPARTMENT_OPTIONS, displayDepartment, type Assignment, type Department } from '@/lib/supabase';
-import { fetchAssignments, addAssignment, updateAssignment, deleteAssignment, fetchAssignmentProgress, setAssignmentProgress, fetchAssignmentProgressCounts } from '@/lib/api';
+import { Plus, Pencil, Trash2, Loader2, ClipboardList, CheckCircle2, Circle, Calendar, AlertTriangle, Cpu, Zap, Users, Trophy, X, BookOpen, Filter } from 'lucide-react';
+import { DEPARTMENT_OPTIONS, displayDepartment, type Assignment, type Lecture, type Department } from '@/lib/supabase';
+import { fetchAssignments, addAssignment, updateAssignment, deleteAssignment, fetchAssignmentProgress, setAssignmentProgress, fetchAssignmentProgressCounts, fetchLectures } from '@/lib/api';
 import { fetchWithCache, isPendingId, updateQueuedOp, dequeue } from '@/lib/offlineStore';
 import { runOrQueue } from '@/lib/offlineSync';
 import { useToast } from '@/components/ToastProvider';
@@ -108,6 +108,10 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
   const [progressCounts, setProgressCounts] = useState<Record<string, number>>({});
 
   const [subject, setSubject] = useState('');
+  const [customSubject, setCustomSubject] = useState('');
+  const [isCustomSubject, setIsCustomSubject] = useState(false);
+  const [scheduleSubjects, setScheduleSubjects] = useState<string[]>([]);
+  const [subjectFilter, setSubjectFilter] = useState<string>('الكل');
   const [title, setTitle] = useState('');
   const [requestDate, setRequestDate] = useState(() => toLocalYMD(new Date()));
   const [dueDate, setDueDate] = useState(() => defaultDueFor(toLocalYMD(new Date())));
@@ -122,6 +126,21 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
       // Offline-first: keeps last known assignments when the network fails.
       const res = await fetchWithCache<Assignment>('assignments', department, () => fetchAssignments(department));
       setAssignments(res.rows);
+
+      // المواد الفريدة من الجدول الأسبوعي (نفس قسم الطالب) — تُستخدم للقائمة والفلترة.
+      try {
+        const lecRes = await fetchWithCache<Lecture>('lectures', department, () => fetchLectures(department));
+        const uniq = Array.from(
+          new Set(
+            lecRes.rows
+              .filter((l) => !l.is_holiday && l.subject && l.subject.trim())
+              .map((l) => l.subject.trim())
+          )
+        ).sort((a, b) => a.localeCompare(b, 'ar'));
+        setScheduleSubjects(uniq);
+      } catch {
+        /* offline — keep previous list */
+      }
 
       // Per-student progress: show the local mirror instantly, then refresh
       // from the cloud (merge). The local mirror is the source of truth for
@@ -158,6 +177,8 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
 
   const resetForm = () => {
     setSubject('');
+    setCustomSubject('');
+    setIsCustomSubject(false);
     setTitle('');
     setEditingId(null);
     setShowForm(false);
@@ -169,7 +190,16 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
 
   const startEdit = (assignment: Assignment) => {
     setEditingId(assignment.id);
-    setSubject(assignment.subject);
+    // إذا كانت المادة من الجدول نختارها من القائمة، وإلا نفعل وضع "مادة أخرى".
+    if (scheduleSubjects.includes(assignment.subject)) {
+      setSubject(assignment.subject);
+      setCustomSubject('');
+      setIsCustomSubject(false);
+    } else {
+      setSubject('__custom__');
+      setCustomSubject(assignment.subject);
+      setIsCustomSubject(true);
+    }
     setTitle(assignment.title);
     setRequestDate(assignment.request_date);
     setDueDate(assignment.due_date);
@@ -181,10 +211,12 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!subject.trim() || !title.trim()) return;
+    // المادة النهائية: من القائمة أو المدخلة يدوياً عبر خيار "مادة أخرى".
+    const finalSubject = isCustomSubject ? customSubject.trim() : subject.trim();
+    if (!finalSubject || !title.trim()) return;
     setSubmitting(true);
     const fields = {
-      subject: subject.trim(),
+      subject: finalSubject,
       title: title.trim(),
       request_date: requestDate,
       due_date: dueDate,
@@ -320,6 +352,13 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
     return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
   });
 
+  // مواد الفلترة: اتحاد مواد الجدول + مواد التكاليف الحالية (لتشمل المواد اليدوية).
+  const filterSubjects = Array.from(
+    new Set([...scheduleSubjects, ...assignments.map((a) => (a.subject ?? '').trim()).filter(Boolean)])
+  ).sort((x, y) => x.localeCompare(y, 'ar'));
+
+  const visible = subjectFilter === 'الكل' ? sorted : sorted.filter((a) => a.subject === subjectFilter);
+
   return (
     <div className="space-y-6 animate-fade-in-up">
       {achievement && (
@@ -409,14 +448,35 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
         >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">المادة</label>
-              <input
-                type="text"
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">المادة (من الجدول الأسبوعي)</label>
+              <select
                 value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="اسم المادة"
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
-              />
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSubject(v);
+                  setIsCustomSubject(v === '__custom__');
+                  if (v !== '__custom__') setCustomSubject('');
+                }}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+              >
+                <option value="">— اختر المادة —</option>
+                {scheduleSubjects.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+                <option value="__custom__">مادة أخرى +</option>
+              </select>
+              {isCustomSubject && (
+                <input
+                  type="text"
+                  value={customSubject}
+                  onChange={(e) => setCustomSubject(e.target.value)}
+                  placeholder="اكتب اسم المادة يدوياً"
+                  className="mt-2 w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+                />
+              )}
+              {scheduleSubjects.length === 0 && !isCustomSubject && (
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">لا توجد مواد في الجدول بعد — اختر "مادة أخرى +" للكتابة يدوياً.</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">عنوان التكليف</label>
@@ -425,7 +485,7 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="عنوان التكليف"
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
               />
             </div>
             <div>
@@ -434,7 +494,7 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
                 type="date"
                 value={requestDate}
                 onChange={(e) => { setRequestDate(e.target.value); if (!dueTouched) setDueDate(defaultDueFor(e.target.value)); }}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
               />
             </div>
             <div>
@@ -443,7 +503,7 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
                 type="date"
                 value={dueDate}
                 onChange={(e) => { setDueDate(e.target.value); setDueTouched(true); }}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
               />
             </div>
             <div className="sm:col-span-2">
@@ -497,8 +557,45 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
           <p className="text-slate-500 dark:text-slate-400">لا توجد تكاليف بعد.</p>
         </div>
       ) : (
+        <>
+          {/* شريط الفلترة السريعة حسب المادة */}
+          {filterSubjects.length > 0 && (
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+              <span className="flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-slate-500 flex-shrink-0">
+                <Filter className="w-3.5 h-3.5" />
+                المادة:
+              </span>
+              {['الكل', ...filterSubjects].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSubjectFilter(s)}
+                  className={`flex-shrink-0 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                    subjectFilter === s
+                      ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30'
+                      : 'bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:border-amber-300 dark:hover:border-amber-700 hover:text-amber-600 dark:hover:text-amber-400'
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+          {subjectFilter !== 'الكل' && visible.length === 0 ? (
+            <div className="text-center py-12 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
+              <BookOpen className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+              <p className="text-slate-500 dark:text-slate-400 text-sm">لا توجد تكاليف لمادة "{subjectFilter}".</p>
+              <button
+                type="button"
+                onClick={() => setSubjectFilter('الكل')}
+                className="mt-3 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline"
+              >
+                عرض الكل
+              </button>
+            </div>
+          ) : (
         <div className="grid gap-3">
-          {sorted.map((assignment) => {
+          {visible.map((assignment) => {
             const daysLeft = getDaysLeft(assignment.due_date);
             const done = isDone(assignment);
             const isOverdue = daysLeft < 0 && !done;
@@ -531,11 +628,12 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
                   </button>
 
                   <div className="flex-1 min-w-0">
-                    {/* اسم المادة بارز في الأعلى، وتحته شرح التكليف */}
+                    {/* شارة المادة المميزة، وتحتها عنوان التكليف بوضوح */}
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className={`font-bold text-slate-800 dark:text-slate-100 ${done ? 'line-through' : ''}`}>
+                      <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-gradient-to-l from-amber-500 to-orange-500 text-white shadow-sm shadow-amber-500/30">
+                        <BookOpen className="w-3.5 h-3.5" />
                         {assignment.subject}
-                      </h4>
+                      </span>
                       {isDeveloper && doneCount > 0 && (
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
                           <Trophy className="w-3 h-3" />
@@ -551,7 +649,9 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
                         </span>
                       )}
                     </div>
-                    <p className={`text-sm text-slate-600 dark:text-slate-300 mt-0.5 ${done ? 'line-through' : ''}`}>{assignment.title}</p>
+                    <h4 className={`font-bold text-base text-slate-800 dark:text-slate-100 mt-1.5 ${done ? 'line-through' : ''}`}>
+                      {assignment.title}
+                    </h4>
                     <div className="flex items-center gap-4 mt-2 text-sm flex-wrap">
                       <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
                         <Calendar className="w-4 h-4" />
@@ -625,6 +725,8 @@ export default function AssignmentsView({ isDeveloper, userId, department }: Pro
             );
           })}
         </div>
+          )}
+        </>
       )}
     </div>
   );

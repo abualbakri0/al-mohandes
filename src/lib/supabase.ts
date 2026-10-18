@@ -85,6 +85,8 @@ export type Exam = {
   location: string | null;
   department: Department | null;
   teacher: string | null;
+  /** شرح الاختبار (الدروس الداخلة، تعليمات، نطاق المنهج) — يظهر للطلاب في البطاقة. */
+  description: string | null;
   created_at: string;
 };
 

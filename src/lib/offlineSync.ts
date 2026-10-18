@@ -109,7 +109,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
       break;
     case 'exams':
       if (op.action === 'insert') {
-        await addExam(p.subject, p.exam_date, p.start_time, p.end_time, p.location ?? '', p.department ?? null, p.teacher ?? '');
+        await addExam(p.subject, p.exam_date, p.start_time, p.end_time, p.location ?? '', p.department ?? null, p.teacher ?? '', p.description ?? '');
       } else if (op.action === 'update') {
         await updateExam(p.id, p.fields);
       } else if (op.action === 'delete') {

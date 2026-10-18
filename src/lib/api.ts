@@ -705,11 +705,12 @@ export async function addExam(
   end_time: string,
   location: string,
   department: Department,
-  teacher: string
+  teacher: string,
+  description: string = ''
 ): Promise<Exam> {
   const { data, error } = await supabase
     .from('exams')
-    .insert({ subject, exam_date, start_time, end_time, location: location || null, department, teacher: teacher || null })
+    .insert({ subject, exam_date, start_time, end_time, location: location || null, department, teacher: teacher || null, description: description.trim() ? description.trim() : null })
     .select()
     .single();
   if (error) throw error;
@@ -881,7 +882,7 @@ export async function updateNotification(
 
 export async function updateExam(
   id: string,
-  fields: Partial<Pick<Exam, 'subject' | 'exam_date' | 'start_time' | 'end_time' | 'location' | 'department' | 'teacher'>>
+  fields: Partial<Pick<Exam, 'subject' | 'exam_date' | 'start_time' | 'end_time' | 'location' | 'department' | 'teacher' | 'description'>>
 ): Promise<void> {
   rememberSelfWrite('exams', id);
   const { error } = await supabase.from('exams').update(fields).eq('id', id);

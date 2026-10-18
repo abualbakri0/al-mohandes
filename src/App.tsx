@@ -41,11 +41,85 @@ const APP_NAME = 'المهندس';
 const DEV_NAME = 'أبوبكر الحيدري';
 const DEV_PHONE = '779809243';
 
+/** شاشة الترحيب المخصصة: اللوجو + الشعار + عبارة الشغف الهندسي */
+// زمن أدنى للعرض: 3000ms (3 ثوانٍ) حتى يراها المستخدم كاملة بوضوح بغض النظر عن سرعة الجهاز.
+const INTRO_MIN_MS = 3000;
+
+function IntroScreen({ onFinish }: { onFinish: () => void }) {
+  const [animate, setAnimate] = useState(false);
+  const [fading, setFading] = useState(false);
+
+  useEffect(() => {
+    // بدء الحركة بعد لحظة قصيرة
+    const t1 = setTimeout(() => setAnimate(true), 80);
+    // زمن أدنى للعرض 2000ms حتى يرى المستخدم الشاشة كاملة بوضوح
+    const t2 = setTimeout(() => {
+      // انتقال ناعم (Fade) قبل الانتقال للشاشة الرئيسية
+      setFading(true);
+      setTimeout(onFinish, 450);
+    }, INTRO_MIN_MS);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [onFinish]);
+
+  return (
+    <div className={`min-h-screen bg-gradient-to-br from-teal-900 via-indigo-900 to-slate-950 flex flex-col items-center justify-center text-white transition-opacity duration-500 ${fading ? 'opacity-0' : 'opacity-100'}`}>
+      {/* أيقونة التطبيق الحقيقية داخل مربع احترافي مبروم الأطراف */}
+      <div
+        className={`w-32 h-32 rounded-[28px] overflow-hidden bg-white/5 ring-1 ring-white/20 shadow-2xl shadow-teal-500/30 backdrop-blur-sm transition-all duration-1000 ease-out ${
+          animate ? 'scale-100 rotate-0 opacity-100' : 'scale-50 rotate-6 opacity-0'
+        }`}
+      >
+        <img src="./icons/icon-512.png" alt="أيقونة تطبيق المهندس" className="w-full h-full object-cover" draggable={false} />
+      </div>
+
+      {/* اسم التطبيق */}
+      <h1
+        className={`mt-10 text-4xl font-black tracking-tight text-white drop-shadow-lg transition-all duration-1000 ${
+          animate ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
+        المهندس
+      </h1>
+
+      <p className="mt-3 text-slate-300 text-sm transition-all duration-1000 animate-pulse">
+        صُنِعَ بشغف هندسي
+      </p>
+    </div>
+  );
+}
+
 function App() {
   const { showToast } = useToast();
   const [user, setUser] = useState<Registration | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const [introDone, setIntroDone] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('schedule');
+
+  // جلب بيانات التهيئة من Supabase بالتوازي مع عرض الشاشة —
+  // لا ننتقل للرئيسية إلا بعد اكتمال الجلب AND انقضاء المدة الدنيا.
+  useEffect(() => {
+    const started = Date.now();
+    let cancelled = false;
+    // جلب بيانات التهيئة (fetchSettings) يعمل بالتوازي مع عرض الشاشة.
+    fetchSettings()
+      .then((s) => { if (!cancelled && s) setSettings(s); })
+      .catch(() => {})
+      .finally(() => {
+        if (cancelled) return;
+        const elapsed = Date.now() - started;
+        const wait = Math.max(0, INTRO_MIN_MS - elapsed);
+        setTimeout(() => { if (!cancelled) setIntroDone(true); }, wait);
+      });
+    // حد أمان: لا تبقى الشاشة أكثر من 6 ثوانٍ مهما حدث.
+    const guard = setTimeout(() => { if (!cancelled) setIntroDone(true); }, 6000);
+    return () => {
+      cancelled = true;
+      clearTimeout(guard);
+    };
+  }, []);
   const [allNotifications, setAllNotifications] = useState<AppNotification[]>([]);
   const [seenNotifIds, setSeenNotifIds] = useState<string[]>(() => {
     try {
@@ -399,6 +473,11 @@ function App() {
   const currentWeek = settings?.semester_start_date
     ? Math.floor((Date.now() - new Date(settings.semester_start_date).getTime()) / (1000 * 60 * 60 * 24 * 7)) + 1
     : null;
+
+  // الشاشة الافتتاحية التفاعلية تظهر أول شيء عند فتح التطبيق.
+  if (!introDone) {
+    return <IntroScreen onFinish={() => setIntroDone(true)} />;
+  }
 
   if (checkingAuth) {
     return (

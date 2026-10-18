@@ -100,6 +100,9 @@ export default function DailyProgramView({ userId, department }: Props) {
 
   const nothingAtAll = dayLectures.length === 0 && dayAssignments.length === 0 && dayExams.length === 0;
 
+  // إذا كان اليوم إجازة (محاضرة بها is_holiday=true) نعرض "إجازة" فقط دون أي بيانات أخرى.
+  const isHoliday = dayLectures.some((l) => l.is_holiday);
+
   return (
     <div className="space-y-6 animate-fade-in-up">
       {/* Header */}
@@ -149,6 +152,14 @@ export default function DailyProgramView({ userId, department }: Props) {
       {loading ? (
         <div className="flex justify-center py-16">
           <Loader2 className="w-8 h-8 text-teal-500 animate-spin" />
+        </div>
+      ) : isHoliday ? (
+        <div className="text-center py-20 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <Coffee className="w-16 h-16 mx-auto text-amber-500 dark:text-amber-400 mb-4" />
+          <h3 className="text-2xl font-bold text-amber-700 dark:text-amber-300 mb-2">إجازة</h3>
+          <p className="text-slate-500 dark:text-slate-400">
+            اليوم إجازة — لا توجد محاضرات، تكاليف أو اختبارات مبرمجة.
+          </p>
         </div>
       ) : nothingAtAll ? (
         <div className="text-center py-16 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">

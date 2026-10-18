@@ -24,14 +24,12 @@
 
 
     <!-- Launch theme:
-         We intentionally DO NOT use the Android 12+ native Theme.SplashScreen,
-         because that system always masks the icon inside a circle and never
-         shows our full branded splash (icon + app name). Instead we use a plain
-         theme whose window background is the full @drawable/splash image, and
-         let the @capacitor/splash-screen plugin (dialog mode) display the
-         complete image on EVERY Android version with no circular cropping. -->
+         الافتتاحية الواحدة فقط هي شاشة الويب (IntroScreen): اللوجو +
+         "المهندس" + "صُنِعَ بشغف هندسي" لمدة 3 ثوانٍ مع Fade.
+         لذلك خلفية النافذة لون سادة فقط (بدون صورة splash) حتى لا
+         تظهر أي افتتاحية أخرى قبلها. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:background">@drawable/splash</item>
+        <item name="android:background">@color/splashBackground</item>
         <!-- edge-to-edge أثناء شاشة البداية أيضاً -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
