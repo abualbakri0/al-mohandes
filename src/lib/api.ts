@@ -655,6 +655,121 @@ export async function deleteAssignment(id: string): Promise<void> {
 
 /**
  * ============================================================
+ * Per-student progress SESSION (server-enforced isolation).
+ *
+ * Section 11 of RUN-THIS-IN-SUPABASE.sql revokes ALL direct anon access to
+ * user_assignment_progress / user_study_progress — the RLS policies were
+ * USING(true), so an unfiltered REST query used to read every student's rows.
+ * From then on every read/write goes through SECURITY DEFINER RPCs that
+ * demand a per-user progress key. The key is minted ONLY by
+ * progress_session_open() after Postgres verifies the student's password,
+ * lives in localStorage per user id (same pattern as the developer grant),
+ * and is cleared on logout.
+ * ============================================================
+ */
+const PROGRESS_KEY_PREFIX = 'progress_key_';
+
+function readProgressKey(userId: string): string | null {
+  try {
+    return localStorage.getItem(PROGRESS_KEY_PREFIX + userId);
+  } catch {
+    return null;
+  }
+}
+
+function saveProgressKey(userId: string, key: string): void {
+  try {
+    localStorage.setItem(PROGRESS_KEY_PREFIX + userId, key);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Logout hygiene — the server keeps the key; the next login re-fetches it. */
+export function clearProgressKey(userId: string): void {
+  try {
+    localStorage.removeItem(PROGRESS_KEY_PREFIX + userId);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** True when this device already holds the student's progress key. */
+export function hasProgressKey(userId: string): boolean {
+  return readProgressKey(userId) !== null;
+}
+
+/**
+ * Mint (or reuse) this student's progress key. Called at every moment the
+ * password is in hand: login, first password creation, and registration.
+ * Never throws — while Section 11 is not deployed yet the app simply keeps
+ * its pre-migration behaviour (direct table access).
+ */
+export async function openProgressSession(phone: string, password: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc('progress_session_open', {
+      p_phone: phone,
+      p_password: password,
+    });
+    if (error) return false; // RPC missing (pre-deployment) or transient failure
+    const row = data as { ok?: boolean; user_id?: string; key?: string } | null;
+    if (row?.ok && row.user_id && row.key) {
+      saveProgressKey(row.user_id, row.key);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True only once Section 11 is live (progress_fetch answers instead of
+ * PGRST202). Used at boot to decide whether a key-less legacy session must
+ * re-enter the password once. Offline or not deployed → false, so a flaky
+ * network can never lock the user out.
+ */
+export async function isProgressIsolationDeployed(): Promise<boolean> {
+  try {
+    const { error } = await supabase.rpc('progress_fetch', {
+      p_user_id: '00000000-0000-0000-0000-000000000000',
+      p_key: '00000000-0000-0000-0000-000000000000',
+      p_kind: 'assignment',
+    });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run one progress RPC. Returns null when the RPC is not deployed yet so the
+ * caller can fall back to its legacy direct path; any other failure (or a
+ * rejected key) throws — views keep their local mirror, writes get queued.
+ */
+async function progressRpc(
+  fn: 'progress_fetch' | 'progress_set' | 'progress_reset_mine' | 'progress_reset_all' | 'progress_counts',
+  args: Record<string, unknown>,
+): Promise<{ ok: boolean; payload: Record<string, unknown> } | null> {
+  let data: unknown = null;
+  let rpcError: unknown = null;
+  try {
+    const res = await supabase.rpc(fn, args);
+    data = res.data;
+    rpcError = res.error;
+  } catch (e) {
+    rpcError = e;
+  }
+  if (rpcError) {
+    if (isMissingRpc(rpcError)) return null; // Section 11 not deployed → legacy
+    throw rpcError; // transient → fail closed (caller queues/retries)
+  }
+  const payload = (data ?? {}) as Record<string, unknown>;
+  return { ok: payload.ok === true, payload };
+}
+
+/**
+ * ============================================================
  * Per-student progress (assignments + study tasks).
  *
  * Completion lives in dedicated per-user tables, NEVER in the shared
@@ -665,15 +780,24 @@ export async function deleteAssignment(id: string): Promise<void> {
  * One row per (user, item) means two students can never share a row, so one
  * student's checkmark can never appear for anyone else.
  *
- * ⚠️ EVERY query below MUST be filtered by user_id. The RLS policies are
- * permissive because the app uses the anon key without Supabase Auth, so the
- * database cannot identify the user on its own — the `user_id` filter in the
- * query is what actually isolates each student's data.
+ * ⚠️ Since Section 11 the isolation is ENFORCED by the database: direct anon
+ * access is revoked and every query below goes through an RPC that validates
+ * (user_id + progress_key). The direct table paths that remain are legacy
+ * fallbacks for the pre-deployment window only — they fail closed afterwards.
  * ============================================================
  */
 
 /** This student's completion map: { [assignment_id]: completed }. */
 export async function fetchAssignmentProgress(userId: string): Promise<Record<string, boolean>> {
+  const key = readProgressKey(userId);
+  if (key) {
+    const res = await progressRpc('progress_fetch', { p_user_id: userId, p_key: key, p_kind: 'assignment' });
+    if (res) {
+      if (!res.ok) throw new Error('progress key rejected');
+      return (res.payload.map as Record<string, boolean> | undefined) ?? {};
+    }
+    // RPC not deployed yet → legacy direct read below.
+  }
   const { data, error } = await supabase
     .from('user_assignment_progress')
     .select('assignment_id, completed')
@@ -686,6 +810,23 @@ export async function fetchAssignmentProgress(userId: string): Promise<Record<st
 
 /** Upsert one student's completion state for a single assignment. */
 export async function setAssignmentProgress(assignmentId: string, userId: string, completed: boolean): Promise<void> {
+  const key = readProgressKey(userId);
+  if (key) {
+    const res = await progressRpc('progress_set', {
+      p_user_id: userId,
+      p_key: key,
+      p_kind: 'assignment',
+      p_item: assignmentId,
+      p_completed: completed,
+    });
+    if (res) {
+      // !ok = pending/unknown item or a rejected key → queue/keep local,
+      // exactly like the legacy path's FK/cast error.
+      if (!res.ok) throw new Error('progress write rejected');
+      return;
+    }
+    // RPC not deployed yet → legacy direct upsert below.
+  }
   const { error } = await supabase
     .from('user_assignment_progress')
     .upsert(
@@ -697,9 +838,19 @@ export async function setAssignmentProgress(assignmentId: string, userId: string
 
 /**
  * Developer stats: how many students completed each assignment → { [id]: count }.
- * Aggregate only — never exposes which student did what.
+ * Aggregate only — never exposes which student did what; behind the signed
+ * developer token once Section 11 is deployed.
  */
 export async function fetchAssignmentProgressCounts(): Promise<Record<string, number>> {
+  const token = getDevGrantToken();
+  if (token) {
+    const res = await progressRpc('progress_counts', { p_kind: 'assignment', p_dev_token: token });
+    if (res) {
+      if (!res.ok) throw new Error('dev token rejected');
+      return (res.payload.counts as Record<string, number> | undefined) ?? {};
+    }
+    // RPC not deployed yet → legacy direct aggregate below.
+  }
   const { data, error } = await supabase
     .from('user_assignment_progress')
     .select('assignment_id')
@@ -758,6 +909,15 @@ export async function deleteStudyTask(id: string): Promise<void> {
 
 /** This student's completion map: { [task_id]: completed }. */
 export async function fetchStudyProgress(userId: string): Promise<Record<string, boolean>> {
+  const key = readProgressKey(userId);
+  if (key) {
+    const res = await progressRpc('progress_fetch', { p_user_id: userId, p_key: key, p_kind: 'study' });
+    if (res) {
+      if (!res.ok) throw new Error('progress key rejected');
+      return (res.payload.map as Record<string, boolean> | undefined) ?? {};
+    }
+    // RPC not deployed yet → legacy direct read below.
+  }
   const { data, error } = await supabase
     .from('user_study_progress')
     .select('task_id, completed')
@@ -770,6 +930,21 @@ export async function fetchStudyProgress(userId: string): Promise<Record<string,
 
 /** Upsert one student's completion state for a single task. */
 export async function setStudyTaskProgress(taskId: string, userId: string, completed: boolean): Promise<void> {
+  const key = readProgressKey(userId);
+  if (key) {
+    const res = await progressRpc('progress_set', {
+      p_user_id: userId,
+      p_key: key,
+      p_kind: 'study',
+      p_item: taskId,
+      p_completed: completed,
+    });
+    if (res) {
+      if (!res.ok) throw new Error('progress write rejected'); // queued by caller
+      return;
+    }
+    // RPC not deployed yet → legacy direct upsert below.
+  }
   const { error } = await supabase
     .from('user_study_progress')
     .upsert(
@@ -781,12 +956,30 @@ export async function setStudyTaskProgress(taskId: string, userId: string, compl
 
 /** Clear ONE student's progress (used by the weekly auto-reset for that student). */
 export async function resetStudyProgressForUser(userId: string): Promise<void> {
+  const key = readProgressKey(userId);
+  if (key) {
+    const res = await progressRpc('progress_reset_mine', { p_user_id: userId, p_key: key });
+    if (res) {
+      if (!res.ok) throw new Error('progress key rejected');
+      return;
+    }
+    // RPC not deployed yet → legacy direct delete below.
+  }
   const { error } = await supabase.from('user_study_progress').delete().eq('user_id', userId);
   if (error) throw error;
 }
 
 /** Clear EVERY student's progress (developer's manual "تصفير" button). */
 export async function resetAllStudyProgress(): Promise<void> {
+  const token = getDevGrantToken();
+  if (token) {
+    const res = await progressRpc('progress_reset_all', { p_dev_token: token });
+    if (res) {
+      if (!res.ok) throw new Error('dev token rejected');
+      return;
+    }
+    // RPC not deployed yet → legacy direct delete below.
+  }
   const { error } = await supabase
     .from('user_study_progress')
     .delete()
@@ -796,9 +989,19 @@ export async function resetAllStudyProgress(): Promise<void> {
 
 /**
  * Developer stats: how many students completed each task → { [task_id]: count }.
- * Aggregate only — never exposes which student did what.
+ * Aggregate only — never exposes which student did what; behind the signed
+ * developer token once Section 11 is deployed.
  */
 export async function fetchStudyProgressCounts(): Promise<Record<string, number>> {
+  const token = getDevGrantToken();
+  if (token) {
+    const res = await progressRpc('progress_counts', { p_kind: 'study', p_dev_token: token });
+    if (res) {
+      if (!res.ok) throw new Error('dev token rejected');
+      return (res.payload.counts as Record<string, number> | undefined) ?? {};
+    }
+    // RPC not deployed yet → legacy direct aggregate below.
+  }
   const { data, error } = await supabase
     .from('user_study_progress')
     .select('task_id')
@@ -983,6 +1186,15 @@ export async function fetchSettings(): Promise<AppSettings | null> {
  * a forged flag is rejected and cleared by validateDeveloperGrant().
  */
 const DEV_GRANT_KEY = 'dev_grant';
+
+/** Internal: the stored signed grant token (null when absent/unreadable). */
+function getDevGrantToken(): string | null {
+  try {
+    return localStorage.getItem(DEV_GRANT_KEY);
+  } catch {
+    return null;
+  }
+}
 
 /** Persist/clear the local developer markers after a successful verification. */
 export function setDeveloperSession(active: boolean): void {

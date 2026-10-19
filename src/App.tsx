@@ -20,7 +20,7 @@ import InstallPrompt from '@/components/InstallPrompt';
 import PullToRefresh from '@/components/PullToRefresh';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 import { useToast } from '@/components/ToastProvider';
-import { fetchSettings, checkRegistration, useSectionBadges, clearSection, seedSectionBadges, isDeveloperSession, setDeveloperSession, validateDeveloperGrant } from '@/lib/api';
+import { fetchSettings, checkRegistration, useSectionBadges, clearSection, seedSectionBadges, isDeveloperSession, setDeveloperSession, validateDeveloperGrant, clearProgressKey, hasProgressKey, isProgressIsolationDeployed } from '@/lib/api';
 import { flushQueue } from '@/lib/offlineSync';
 import { pendingCount } from '@/lib/offlineStore';
 import { useNightAlerts } from '@/hooks/useNightAlerts';
@@ -343,33 +343,62 @@ function App() {
           fetchSettings().then(setSettings).catch(() => {});
           return;
         }
-        // Developer shortcut only for the real developer identity; the
-        // localStorage flag no longer grants (validated via refreshDevGrant).
-        const isDev = parsed.name === DEV_NAME && parsed.phone === DEV_PHONE;
-        if (isDev) {
+        // Restore this stored session (shared by the dev shortcut below and
+        // the normal restore path).
+        const restoreSession = () => {
+          // Developer shortcut only for the real developer identity; the
+          // localStorage flag no longer grants (validated via refreshDevGrant).
+          const isDev = parsed.name === DEV_NAME && parsed.phone === DEV_PHONE;
+          if (isDev) {
+            setUser(parsed);
+            setCheckingAuth(false);
+            fetchSettings().then(setSettings).catch(() => {});
+            return;
+          }
+          // Restore the stored session immediately. Network validation must not
+          // hide the app or discard a valid local session while offline.
           setUser(parsed);
           setCheckingAuth(false);
-          fetchSettings().then(setSettings).catch(() => {});
+          void (async () => {
+            const fresh = await Promise.race([
+              checkRegistration(parsed.phone),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+            ]).catch(() => null);
+            if (fresh && fresh.is_approved) {
+              localStorage.setItem('univ_user', JSON.stringify(fresh));
+              setUser(fresh);
+            } else if (fresh && !fresh.is_approved) {
+              localStorage.removeItem('univ_user');
+              setDeveloperSession(false);
+              setUser(null);
+            }
+          })();
+        };
+
+        // Server-side progress isolation (Section 11): a session predating its
+        // progress key cannot read/write checkmarks once direct table access
+        // is revoked. Ask for the password ONCE (back to the gate) to mint the
+        // key — but never over a flaky network or before the RPCs exist
+        // (either case simply keeps the old behaviour).
+        if (!hasProgressKey(parsed.id)) {
+          void (async () => {
+            const deployed = await Promise.race([
+              isProgressIsolationDeployed(),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 8000)),
+            ]).catch(() => false);
+            if (deployed) {
+              localStorage.removeItem('univ_user');
+              setDeveloperSession(false);
+              setUser(null);
+              setCheckingAuth(false);
+              fetchSettings().then(setSettings).catch(() => {});
+            } else {
+              restoreSession();
+            }
+          })();
           return;
         }
-        // Restore the stored session immediately. Network validation must not
-        // hide the app or discard a valid local session while offline.
-        setUser(parsed);
-        setCheckingAuth(false);
-        void (async () => {
-          const fresh = await Promise.race([
-            checkRegistration(parsed.phone),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
-          ]).catch(() => null);
-          if (fresh && fresh.is_approved) {
-            localStorage.setItem('univ_user', JSON.stringify(fresh));
-            setUser(fresh);
-          } else if (fresh && !fresh.is_approved) {
-            localStorage.removeItem('univ_user');
-            setDeveloperSession(false);
-            setUser(null);
-          }
-        })();
+        restoreSession();
         return;
       } catch {
         // Preserve malformed/unreadable stored data for diagnosis/recovery;
@@ -493,6 +522,7 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('univ_user');
+    if (user) clearProgressKey(user.id);
     setDeveloperSession(false);
     setDevGrant(false);
     setUser(null);

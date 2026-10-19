@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { GraduationCap, UserPlus, Loader2, Phone, User as UserIcon, CalendarDays, BookOpen, Bell, Cpu, Zap, KeyRound, Shield, Clock, RefreshCw, ArrowRight, Lock, Eye, EyeOff, HelpCircle, WifiOff } from 'lucide-react';
-import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, type Registration } from '@/lib/api';
+import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, openProgressSession, type Registration } from '@/lib/api';
 import { fetchSettings } from '@/lib/api';
 import type { AppSettings } from '@/lib/supabase';
 import { useToast } from '@/components/ToastProvider';
@@ -181,6 +181,10 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
         return;
       }
 
+      // Mint this student's server-side progress key while the password is in
+      // hand (Section 11 isolation) — non-fatal: login proceeds either way.
+      await openProgressSession(phoneDigits, password);
+
       localStorage.setItem('univ_user', JSON.stringify(existing));
       onRegistered(existing);
     } catch {
@@ -254,6 +258,8 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
     setError(null);
     try {
       const reg = await addRegistration(name.trim(), phoneDigits, department, password);
+      // Password was stored above → mint the progress key too (non-fatal).
+      await openProgressSession(phoneDigits, password);
       if (isDev) {
         localStorage.setItem('univ_user', JSON.stringify(reg));
         onRegistered(reg);
@@ -299,6 +305,8 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
         return;
       }
       await setUserPassword(activeUser.id, activeUser.phone, password);
+      // Password now exists server-side → mint the progress key too (non-fatal).
+      await openProgressSession(activeUser.phone, password);
       const updated: Registration = { ...activeUser, password_hash: 'set', must_change_password: false };
       localStorage.setItem('univ_user', JSON.stringify(updated));
       onRegistered(updated);

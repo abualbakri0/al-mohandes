@@ -489,4 +489,245 @@ DROP POLICY IF EXISTS "Enable delete for all on app_settings" ON app_settings;
 -- لذا مسار else في updateSettings (INSERT) صار غير قابل للاستدعاء نهائياً.
 
 
+-- ============================================================
+-- 11) عزل تقدم الطلاب على مستوى السيرفر (تكاليف + مذاكرة)
+-- ============================================================
+-- الحالة قبل هذا القسم: سياسات RLS على user_assignment_progress و
+-- user_study_progress كانت USING(true) — أي حامل لمفتاح anon يقرأ/يعدّل
+-- تقدم كل الطلاب باستعلام واحد بلا فلتر. فلتر user_id في كود الواجهة
+-- وحده ليس عزلاً (يُتجاوز بـ Rest API مباشرةً).
+--
+-- الحل (بنفس نمط حجز المطوّر في القسم 8):
+--   1) student_keys: مفتاح تقدم خاص بكل طالب — بلا سياسات وبلا صلاحيات anon.
+--   2) المفتاح لا يُصدر إلا عبر RPC تتحقق من كلمة المرور داخل Postgres.
+--   3) كل جلب/كتابة/تصفير يمر عبر RPCs تتحقق من (user_id + مفتاح) معاً.
+--   4) إلغاء كل الصلاحيات المباشرة على الجدولين + إسقاط سياساتهما.
+-- العميل الجديد يحفظ المفتاح لكل مستخدم في localStorage وينظّفه عند الخروج؛
+-- الجلسات القديمة (بلا مفتاح) تُطلب منها إدخال كلمة المرور مرة واحدة عند
+-- أول تشغيل بعد تنفيذ هذا القسم (فحص isProgressIsolationDeployed).
+-- ============================================================
+
+-- 11/أ: جدول مفاتيح التقدم — غياب أي سياسة يعني أن RLS يمنع كل شيء،
+--       وREVOKE يضيف طبقة ثانية حتى لو أُعيد منح صلاحية لاحقاً.
+CREATE TABLE IF NOT EXISTS student_keys (
+  user_id      uuid PRIMARY KEY REFERENCES registrations(id) ON DELETE CASCADE,
+  progress_key uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE student_keys ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON student_keys FROM anon, authenticated;
+
+-- 11/ب: فتح جلسة تقدم — التحقق من كلمة المرور داخل السيرفر ثم إصدار المفتاح.
+CREATE OR REPLACE FUNCTION public.progress_session_open(p_phone TEXT, p_password TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+  v_user uuid;
+  v_hash TEXT;
+  v_key  uuid;
+BEGIN
+  IF p_phone IS NULL OR p_password IS NULL THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_input');
+  END IF;
+  -- نفس منطق checkRegistration: أقدم صف عند تكرار الرقم.
+  SELECT id INTO v_user FROM registrations WHERE phone = p_phone
+   ORDER BY created_at ASC LIMIT 1;
+  IF v_user IS NULL THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'no_user');
+  END IF;
+  SELECT up.password_hash INTO v_hash FROM user_passwords up WHERE up.phone = p_phone;
+  IF v_hash IS NULL OR v_hash <> app_password_hash(p_phone, p_password) THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_password');
+  END IF;
+  INSERT INTO student_keys (user_id) VALUES (v_user) ON CONFLICT (user_id) DO NOTHING;
+  SELECT progress_key INTO v_key FROM student_keys WHERE user_id = v_user;
+  RETURN jsonb_build_object('ok', TRUE, 'user_id', v_user, 'key', v_key);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.progress_session_open(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.progress_session_open(TEXT, TEXT) TO anon, authenticated;
+
+-- 11/ج: جلب خريطة إنجاز طالب — لا يُعاد شيء إلا بمفتاحه الصحيح.
+CREATE OR REPLACE FUNCTION public.progress_fetch(p_user_id uuid, p_key uuid, p_kind TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+  IF p_user_id IS NULL OR p_key IS NULL OR p_kind IS NULL
+     OR p_kind NOT IN ('assignment', 'study') THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_input');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM student_keys k WHERE k.user_id = p_user_id AND k.progress_key = p_key
+  ) THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_key');
+  END IF;
+  IF p_kind = 'assignment' THEN
+    RETURN jsonb_build_object('ok', TRUE, 'map', COALESCE((
+      SELECT jsonb_object_agg(assignment_id, completed)
+        FROM user_assignment_progress WHERE user_id = p_user_id
+    ), '{}'::jsonb));
+  END IF;
+  RETURN jsonb_build_object('ok', TRUE, 'map', COALESCE((
+    SELECT jsonb_object_agg(task_id, completed)
+      FROM user_study_progress WHERE user_id = p_user_id
+  ), '{}'::jsonb));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.progress_fetch(uuid, uuid, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.progress_fetch(uuid, uuid, TEXT) TO anon, authenticated;
+
+-- 11/د: كتابة حالة إنجاز واحدة — upsert صف واحد لكل (طالب + بند).
+--       p_item نص لأن الطابور غير المتصل قد يحمل معرّفاً مؤقتاً (pending_*)
+--       أو معرّفاً غير موجود بعد — تُرفض بـ {ok:false} بدل استثناء يُسقط RPC.
+CREATE OR REPLACE FUNCTION public.progress_set(
+  p_user_id   uuid,
+  p_key       uuid,
+  p_kind      TEXT,
+  p_item      TEXT,
+  p_completed BOOLEAN
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+  v_item uuid;
+BEGIN
+  IF p_user_id IS NULL OR p_key IS NULL OR p_kind IS NULL
+     OR p_item IS NULL OR p_completed IS NULL
+     OR p_kind NOT IN ('assignment', 'study') THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_input');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM student_keys k WHERE k.user_id = p_user_id AND k.progress_key = p_key
+  ) THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_key');
+  END IF;
+  BEGIN
+    v_item := p_item::uuid;
+  EXCEPTION WHEN invalid_text_representation THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_item');
+  END;
+  IF p_kind = 'assignment' THEN
+    BEGIN
+      INSERT INTO user_assignment_progress (user_id, assignment_id, completed, updated_at)
+      VALUES (p_user_id, v_item, p_completed, now())
+      ON CONFLICT (user_id, assignment_id)
+      DO UPDATE SET completed = EXCLUDED.completed, updated_at = now();
+    EXCEPTION WHEN foreign_key_violation THEN
+      RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_item');
+    END;
+  ELSE
+    BEGIN
+      INSERT INTO user_study_progress (user_id, task_id, completed, updated_at)
+      VALUES (p_user_id, v_item, p_completed, now())
+      ON CONFLICT (user_id, task_id)
+      DO UPDATE SET completed = EXCLUDED.completed, updated_at = now();
+    EXCEPTION WHEN foreign_key_violation THEN
+      RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_item');
+    END;
+  END IF;
+  RETURN jsonb_build_object('ok', TRUE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.progress_set(uuid, uuid, TEXT, TEXT, BOOLEAN) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.progress_set(uuid, uuid, TEXT, TEXT, BOOLEAN) TO anon, authenticated;
+
+-- 11/هـ: تصفير مذاكرة طالب واحد (التصفير الأسبوعي) — بمفتاحه فقط.
+CREATE OR REPLACE FUNCTION public.progress_reset_mine(p_user_id uuid, p_key uuid)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+  IF p_user_id IS NULL OR p_key IS NULL THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_input');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM student_keys k WHERE k.user_id = p_user_id AND k.progress_key = p_key
+  ) THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_key');
+  END IF;
+  DELETE FROM user_study_progress WHERE user_id = p_user_id;
+  RETURN jsonb_build_object('ok', TRUE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.progress_reset_mine(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.progress_reset_mine(uuid, uuid) TO anon, authenticated;
+
+-- 11/و: تصفير شامل (زر المطوّر) — بتوكن مطوّر الموقّع لا بمفتاح طالب.
+CREATE OR REPLACE FUNCTION public.progress_reset_all(p_dev_token TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+  IF NOT verify_dev_token(p_dev_token) THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_token');
+  END IF;
+  DELETE FROM user_study_progress;
+  RETURN jsonb_build_object('ok', TRUE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.progress_reset_all(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.progress_reset_all(TEXT) TO anon, authenticated;
+
+-- 11/ز: عدّادات المطوّر (تجميع فقط — بلا كشف أي هوية) خلف توكن المطوّر.
+CREATE OR REPLACE FUNCTION public.progress_counts(p_kind TEXT, p_dev_token TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+  IF p_kind IS NULL OR p_kind NOT IN ('assignment', 'study') THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_input');
+  END IF;
+  IF NOT verify_dev_token(p_dev_token) THEN
+    RETURN jsonb_build_object('ok', FALSE, 'reason', 'bad_token');
+  END IF;
+  IF p_kind = 'assignment' THEN
+    RETURN jsonb_build_object('ok', TRUE, 'counts', COALESCE((
+      SELECT jsonb_object_agg(assignment_id, cnt) FROM (
+        SELECT assignment_id, count(*)::int AS cnt
+          FROM user_assignment_progress WHERE completed GROUP BY 1
+      ) s
+    ), '{}'::jsonb));
+  END IF;
+  RETURN jsonb_build_object('ok', TRUE, 'counts', COALESCE((
+    SELECT jsonb_object_agg(task_id, cnt) FROM (
+      SELECT task_id, count(*)::int AS cnt
+        FROM user_study_progress WHERE completed GROUP BY 1
+    ) s
+  ), '{}'::jsonb));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.progress_counts(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.progress_counts(TEXT, TEXT) TO anon, authenticated;
+
+-- 11/ح: إغلاق الوصول المباشر — إلغاء كل صلاحيات anon على الجدولين
+--       وإسقاط سياساتهما؛ من هنا فصاعداً لا تمر أي قراءة أو كتابة إلا عبر
+--       الـ RPCs أعلاه (التي تتحقق من المفتاح داخلياً). صلاحيات
+--       service_role (دوال الحافة) لا تُلغى هنا.
+REVOKE ALL ON user_assignment_progress FROM anon, authenticated;
+REVOKE ALL ON user_study_progress FROM anon, authenticated;
+DROP POLICY IF EXISTS "select_user_assignment_progress" ON user_assignment_progress;
+DROP POLICY IF EXISTS "insert_user_assignment_progress" ON user_assignment_progress;
+DROP POLICY IF EXISTS "update_user_assignment_progress" ON user_assignment_progress;
+DROP POLICY IF EXISTS "delete_user_assignment_progress" ON user_assignment_progress;
+DROP POLICY IF EXISTS "select_user_study_progress" ON user_study_progress;
+DROP POLICY IF EXISTS "insert_user_study_progress" ON user_study_progress;
+DROP POLICY IF EXISTS "update_user_study_progress" ON user_study_progress;
+DROP POLICY IF EXISTS "delete_user_study_progress" ON user_study_progress;
+
+
 
