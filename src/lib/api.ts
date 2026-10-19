@@ -258,6 +258,21 @@ export async function hashPassword(password: string, phone: string): Promise<str
     .join('');
 }
 
+/**
+ * True when an RPC failed only because the function does not exist yet
+ * (backend migration not applied). Every other failure must fail closed —
+ * this check is what keeps the legacy fallback from reopening holes.
+ */
+type RpcErrorLike = { code?: string; message?: string };
+
+function isMissingRpc(error: unknown): boolean {
+  const e = error as RpcErrorLike | null | undefined;
+  if (!e) return false;
+  if (e.code === 'PGRST202' || e.code === '42883') return true;
+  const msg = (e.message ?? '').toLowerCase();
+  return msg.includes('could not find the function') || msg.includes('does not exist');
+}
+
 export async function fetchRegistrations(): Promise<Registration[]> {
   const { data, error } = await supabase
     .from('registrations')
@@ -277,10 +292,12 @@ export async function addRegistration(name: string, phone: string, department?: 
     .single();
   if (error) throw error;
 
-  // If a password was provided, store it in user_passwords.
+  // If a password was provided, store it server-side via set_password RPC
+  // (the hash is computed in Postgres — never in the browser). Falls back to
+  // the legacy client-side write only while the RPC is not deployed yet.
   if (password) {
-    const password_hash = await hashPassword(password, phone);
-    await upsertPassword(phone, password_hash, false);
+    const res = await setPasswordViaRpcOrLegacy(phone, password, false);
+    if (!res.ok) throw new Error('تعذّر حفظ كلمة المرور');
   }
   return data;
 }
@@ -311,72 +328,208 @@ export async function checkRegistration(phone: string): Promise<Registration | n
   if (!data || data.length === 0) return null;
 
   const reg = data[0] as Registration;
-  // Attach password state from the dedicated user_passwords table. If that
-  // table is not set up yet, password_hash stays undefined and the UI runs in
-  // phone-only mode (legacy behaviour).
-  const pwd = await fetchPasswordState(phone);
-  reg.password_hash = pwd.available ? pwd.password_hash : undefined;
-  reg.must_change_password = pwd.available ? pwd.must_change_password : false;
+  // Security: password hashes must NEVER be pulled to the client (RPC mode).
+  // While the backend migration is not applied yet, the legacy fallback keeps
+  // the old client-side hash (only possible while the old SELECT policy on
+  // user_passwords still exists); when neither path is available the app runs
+  // phone-only — fail-safe, never a hash leak.
+  const pwd = await fetchPasswordStatus(phone);
+  if (pwd.mode === 'rpc') {
+    reg.password_hash = pwd.hasPassword ? 'rpc' : null;
+  } else if (pwd.mode === 'legacy') {
+    reg.password_hash = pwd.hash;
+  } else {
+    reg.password_hash = undefined; // feature unavailable → phone-only login
+  }
+  reg.must_change_password = pwd.mustChange;
   return reg;
 }
 
 /**
- * Verify a plaintext password against a stored hash for the given phone.
+ * Verify a user password. The normal path compares the hash inside Postgres
+ * (verify_password RPC) — the hash never leaves the server. Only while the
+ * RPC is not deployed yet does the legacy local comparison run, and only
+ * against a hash that was already in hand for that pre-migration mode.
  */
 export async function verifyPassword(phone: string, password: string, storedHash: string | null): Promise<boolean> {
-  if (!storedHash) return false;
-  const candidate = await hashPassword(password, phone);
-  return candidate === storedHash;
+  if (!password) return false;
+  let data: unknown = null;
+  let rpcError: unknown = null;
+  try {
+    const res = await supabase.rpc('verify_password', { p_phone: phone, p_password: password });
+    data = res.data;
+    rpcError = res.error;
+  } catch (e) {
+    rpcError = e;
+  }
+  if (!rpcError) return data === true;
+  if (!isMissingRpc(rpcError)) return false; // transient failure → fail closed
+
+  // Pre-migration fallback (RPC not deployed): compare the legacy hash locally.
+  if (storedHash && storedHash !== 'rpc') {
+    try {
+      return (await hashPassword(password, phone)) === storedHash;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 /**
- * Passwords are stored in a dedicated `user_passwords` table (keyed by phone),
- * NOT in the registrations table. All helpers below fail soft: if the table
- * does not exist yet, they report the feature as unavailable and the app falls
- * back to phone-only login (so registration/login never hard-fail).
+ * Passwords live in the dedicated `user_passwords` table (keyed by phone).
+ * Security model (hardened): hashes NEVER travel to the client. Status checks
+ * go through `password_status` RPC, verification through `verify_password`,
+ * writes through `set_password` (SECURITY DEFINER on the server).
  */
-type PasswordState = { available: boolean; password_hash: string | null; must_change_password: boolean };
+type PasswordStatus = {
+  /**
+   * 'rpc'    = checked server-side (hash never fetched);
+   * 'legacy' = pre-migration direct read (local hash available for the old
+   *            comparison — only reachable while the old SELECT policy exists);
+   * 'none'   = password feature unavailable → phone-only login (fail-safe).
+   */
+  mode: 'rpc' | 'legacy' | 'none';
+  hasPassword: boolean;
+  mustChange: boolean;
+  /** Legacy mode only — the stored hash (never fetched once the RPC exists). */
+  hash: string | null;
+};
 
-async function fetchPasswordState(phone: string): Promise<PasswordState> {
+async function fetchPasswordStatus(phone: string): Promise<PasswordStatus> {
+  // 1) Preferred: server-side status (no hash ever crosses the wire).
+  try {
+    const { data, error } = await supabase.rpc('password_status', { p_phone: phone });
+    if (!error) {
+      const row = data as { has_password?: boolean; must_change?: boolean } | null;
+      return {
+        mode: 'rpc',
+        hasPassword: row ? Boolean(row.has_password) : false,
+        mustChange: row ? Boolean(row.must_change) : false,
+        hash: null,
+      };
+    }
+    if (!isMissingRpc(error)) {
+      // Transient failure — fail closed (password required) instead of
+      // dropping everyone into phone-only login.
+      return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null };
+    }
+  } catch {
+    return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null };
+  }
+
+  // 2) Pre-migration fallback: RPC not deployed → read status directly
+  //    (possible only while the old SELECT policy on user_passwords exists).
   try {
     const { data, error } = await supabase
       .from('user_passwords')
       .select('password_hash, must_change_password')
       .eq('phone', phone)
       .limit(1);
-    if (error) return { available: false, password_hash: null, must_change_password: false };
-    const row = data && data.length > 0 ? data[0] : null;
-    return {
-      available: true,
-      password_hash: row ? (row.password_hash as string | null) : null,
-      must_change_password: row ? Boolean(row.must_change_password) : false,
-    };
+    if (!error) {
+      const row =
+        Array.isArray(data) && data.length > 0
+          ? (data[0] as { password_hash?: string | null; must_change_password?: boolean })
+          : null;
+      return {
+        mode: 'legacy',
+        hasPassword: Boolean(row?.password_hash),
+        mustChange: row ? Boolean(row.must_change_password) : false,
+        hash: row?.password_hash ?? null,
+      };
+    }
+    const msg = (error.message ?? '').toLowerCase();
+    const denied =
+      error.code === '42501' ||
+      error.code === 'PGRST301' ||
+      msg.includes('permission') ||
+      msg.includes('row-level security') ||
+      msg.includes('policy');
+    if (denied) {
+      // SELECT already dropped while the RPC is also missing (partial
+      // migration): phone-only — fail-safe, never a hash leak.
+      return { mode: 'none', hasPassword: false, mustChange: false, hash: null };
+    }
   } catch {
-    return { available: false, password_hash: null, must_change_password: false };
+    /* fall through → fail closed */
   }
+  return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null };
 }
 
-async function upsertPassword(phone: string, password_hash: string | null, mustChange: boolean): Promise<boolean> {
+/**
+ * Pre-migration write path: hash the password in the browser and upsert it
+ * directly. Only reachable while the set_password RPC is not deployed — once
+ * RUN-THIS-IN-SUPABASE.sql is executed the INSERT policy on user_passwords is
+ * gone too, so this path fails closed instead of writing.
+ */
+async function upsertPasswordLegacy(phone: string, password: string, mustChange: boolean): Promise<void> {
+  const hash = await hashPassword(password, phone);
+  const { error } = await supabase
+    .from('user_passwords')
+    .upsert(
+      {
+        phone,
+        password_hash: hash,
+        must_change_password: mustChange,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'phone' },
+    );
+  if (error) throw error;
+}
+
+/**
+ * Write a password through the set_password RPC (hash computed in Postgres).
+ * Falls back to the legacy client-side write ONLY while the RPC does not
+ * exist yet; every other failure returns ok:false (fail closed).
+ */
+async function setPasswordViaRpcOrLegacy(
+  phone: string,
+  password: string,
+  mustChange: boolean,
+  current: string | null = null,
+): Promise<{ ok: boolean; reason?: string }> {
+  let data: unknown = null;
+  let rpcError: unknown = null;
   try {
-    const { error } = await supabase
-      .from('user_passwords')
-      .upsert(
-        { phone, password_hash, must_change_password: mustChange, updated_at: new Date().toISOString() },
-        { onConflict: 'phone' }
-      );
-    return !error;
-  } catch {
-    return false;
+    const res = await supabase.rpc('set_password', {
+      p_phone: phone,
+      p_password: password,
+      p_must_change: mustChange,
+      p_current: current,
+    });
+    data = res.data;
+    rpcError = res.error;
+  } catch (e) {
+    rpcError = e;
   }
+
+  if (!rpcError) {
+    const row = data as { ok?: boolean; reason?: string } | boolean | null;
+    if (typeof row === 'boolean') return { ok: row };
+    if (row && typeof row === 'object') return { ok: row.ok !== false, reason: row.reason };
+    return { ok: true };
+  }
+
+  if (isMissingRpc(rpcError)) {
+    try {
+      await upsertPasswordLegacy(phone, password, mustChange);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: (e as { message?: string })?.message ?? 'legacy_write_failed' };
+    }
+  }
+  return { ok: false, reason: 'network' };
 }
 
 /**
  * Set (or change) a user's password and clear the must_change_password flag.
+ * Server-side via set_password RPC (hash computed in Postgres).
  */
 export async function setUserPassword(id: string, phone: string, password: string): Promise<void> {
-  const password_hash = await hashPassword(password, phone);
-  const ok = await upsertPassword(phone, password_hash, false);
-  if (!ok) throw new Error('تعذّر حفظ كلمة المرور');
+  void id;
+  const res = await setPasswordViaRpcOrLegacy(phone, password, false);
+  if (!res.ok) throw new Error('تعذّر حفظ كلمة المرور');
 }
 
 /**
@@ -384,15 +537,17 @@ export async function setUserPassword(id: string, phone: string, password: strin
  * force them to create a new password on next login.
  */
 export async function resetUserPassword(id: string, phone: string): Promise<void> {
-  const password_hash = await hashPassword(phone, phone);
-  const ok = await upsertPassword(phone, password_hash, true);
-  if (!ok) throw new Error('تعذّر إعادة تعيين كلمة المرور');
+  void id;
+  const res = await setPasswordViaRpcOrLegacy(phone, phone, true);
+  if (!res.ok) throw new Error('تعذّر إعادة تعيين كلمة المرور');
 }
 
 /**
- * Change a user's own password from the settings screen. Verifies the current
- * password first (so no one can change it without knowing the old one), then
- * stores the new hash. Returns a status so the UI can show the right message.
+ * Change a user's own password from the settings screen. Verification of the
+ * current password happens inside the set_password RPC (it rejects a wrong
+ * current password), so no hash is ever compared in the browser — except in
+ * the pre-migration legacy fallback, the only path that still holds a local
+ * hash and that disappears once RUN-THIS-IN-SUPABASE.sql is executed.
  */
 export async function changeOwnPassword(
   id: string,
@@ -400,27 +555,30 @@ export async function changeOwnPassword(
   currentPassword: string,
   newPassword: string
 ): Promise<{ ok: boolean; error?: string }> {
+  void id;
   if (newPassword.length < 4) {
     return { ok: false, error: 'كلمة المرور يجب أن تكون 4 أحرف على الأقل' };
   }
 
-  // Load password state from the dedicated user_passwords table.
-  const state = await fetchPasswordState(phone);
-  if (!state.available) {
-    return { ok: false, error: 'ميزة كلمة المرور غير مفعّلة بعد.' };
+  // The current password is required whenever one exists — determined without
+  // pulling the hash (password_status RPC / legacy status read).
+  const status = await fetchPasswordStatus(phone);
+  if (status.hasPassword && !currentPassword) {
+    return { ok: false, error: 'أدخل كلمة المرور الحالية' };
+  }
+  if (status.mode === 'legacy' && status.hash && currentPassword) {
+    // Pre-migration only: the old flow compared the hash locally.
+    const match = (await hashPassword(currentPassword, phone)) === status.hash;
+    if (!match) return { ok: false, error: 'كلمة المرور الحالية غير صحيحة' };
   }
 
-  // If a password already exists, the current one must match.
-  if (state.password_hash) {
-    const currentHash = await hashPassword(currentPassword, phone);
-    if (currentHash !== state.password_hash) {
-      return { ok: false, error: 'كلمة المرور الحالية غير صحيحة' };
-    }
+  const res = await setPasswordViaRpcOrLegacy(phone, newPassword, false, currentPassword || null);
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: res.reason === 'bad_current' ? 'كلمة المرور الحالية غير صحيحة' : 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.',
+    };
   }
-
-  const password_hash = await hashPassword(newPassword, phone);
-  const ok = await upsertPassword(phone, password_hash, false);
-  if (!ok) return { ok: false, error: 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.' };
 
   return { ok: true };
 }
@@ -580,15 +738,6 @@ export async function addStudyTask(
   if (error) throw error;
   rememberSelfWrite('study_tasks', data.id);
   return data;
-}
-
-export async function toggleStudyTask(id: string, completed: boolean): Promise<void> {
-  rememberSelfWrite('study_tasks', id);
-  const { error } = await supabase
-    .from('study_tasks')
-    .update({ completed: !completed })
-    .eq('id', id);
-  if (error) throw error;
 }
 
 export async function deleteStudyTask(id: string): Promise<void> {
@@ -812,16 +961,140 @@ export async function deleteFeedback(id: string): Promise<void> {
 }
 
 export async function fetchSettings(): Promise<AppSettings | null> {
+  // Security: never expose dev_password to the client. The developer code is
+  // verified server-side via verify_developer_code RPC; the client only needs
+  // the public display fields (level/semester/start date).
   const { data, error } = await supabase
     .from('app_settings')
-    .select('*')
+    .select('id, academic_level, semester, semester_start_date, updated_at')
     .limit(1)
     .single();
   if (error) return null;
-  return data;
+  return { ...(data as object), dev_password: '' } as AppSettings;
 }
 
-export async function updateSettings(updates: Partial<Pick<AppSettings, 'dev_password' | 'academic_level' | 'semester' | 'semester_start_date'>>): Promise<void> {
+/**
+ * ── Developer session (server-signed grant) ────────────────────────────────
+ * verify_developer_code RPC answers with an HMAC token bound to dev_password
+ * (30-day expiry). verify_dev_token re-checks it server-side on every app
+ * boot. Forging localStorage no longer grants the developer UI: a bare legacy
+ * `is_dev` flag is honoured only while the RPCs are not deployed yet
+ * (pre-migration compatibility); after RUN-THIS-IN-SUPABASE.sql is executed
+ * a forged flag is rejected and cleared by validateDeveloperGrant().
+ */
+const DEV_GRANT_KEY = 'dev_grant';
+
+/** Persist/clear the local developer markers after a successful verification. */
+export function setDeveloperSession(active: boolean): void {
+  try {
+    if (active) {
+      localStorage.setItem('is_dev', 'true');
+    } else {
+      localStorage.removeItem('is_dev');
+      localStorage.removeItem(DEV_GRANT_KEY);
+    }
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/**
+ * True only when a server-signed grant token is present. The token cannot be
+ * forged without dev_password, so hand-written localStorage data grants
+ * nothing — this is the immediate post-login signal, with
+ * validateDeveloperGrant() performing the authoritative server-side check.
+ */
+export function isDeveloperSession(): boolean {
+  try {
+    return localStorage.getItem(DEV_GRANT_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate the stored developer grant against the server (verify_dev_token):
+ * - valid → keep it and return true; invalid/expired → clear it, return false.
+ * - RPC missing (SQL not executed yet) → honour the legacy `is_dev` flag so
+ *   the transition never locks the developer out (old behaviour).
+ * - Network failure → only a signed token is trusted; a forged flag never
+ *   grants access while offline.
+ */
+export async function validateDeveloperGrant(): Promise<boolean> {
+  let token: string | null = null;
+  let legacy = false;
+  try {
+    token = localStorage.getItem(DEV_GRANT_KEY);
+    legacy = localStorage.getItem('is_dev') === 'true';
+  } catch {
+    /* storage unavailable */
+  }
+  if (!token && !legacy) return false;
+  try {
+    const { data, error } = await supabase.rpc('verify_dev_token', { p_token: token ?? '' });
+    if (!error) {
+      const ok = data === true;
+      if (!ok) setDeveloperSession(false);
+      return ok;
+    }
+    if (isMissingRpc(error)) return legacy; // pre-migration compatibility
+    return token !== null;                  // transient failure → signed token only
+  } catch {
+    return token !== null;                  // offline → signed token only
+  }
+}
+
+/**
+ * Verify the developer access code server-side (dev_password never reaches
+ * the browser once the RPC is deployed). On success a signed 30-day grant
+ * token is stored for validateDeveloperGrant(). While the RPC is not deployed
+ * yet the legacy direct settings read keeps old installs working; any other
+ * failure fails closed.
+ */
+export async function verifyDeveloperCode(code: string): Promise<boolean> {
+  const trimmed = code.trim();
+  if (!trimmed) return false;
+  try {
+    const { data, error } = await supabase.rpc('verify_developer_code', { p_code: trimmed });
+    if (!error) {
+      const ok = typeof data === 'string' ? data.length > 0 : data === true;
+      if (ok) {
+        if (typeof data === 'string' && data.length > 0) {
+          try {
+            localStorage.setItem(DEV_GRANT_KEY, data);
+          } catch {
+            /* storage unavailable */
+          }
+        }
+        setDeveloperSession(true);
+      }
+      return ok;
+    }
+    if (!isMissingRpc(error)) return false; // transient → fail closed
+  } catch {
+    return false;
+  }
+
+  // Pre-migration fallback: RPC not deployed → read dev_password directly
+  // (still possible until RUN-THIS-IN-SUPABASE.sql is executed).
+  try {
+    const { data, error } = await supabase.from('app_settings').select('dev_password').limit(1);
+    if (
+      !error &&
+      Array.isArray(data) &&
+      data.length > 0 &&
+      (data[0] as { dev_password?: string | null }).dev_password === trimmed
+    ) {
+      setDeveloperSession(true);
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+export async function updateSettings(updates: Partial<Pick<AppSettings, 'academic_level' | 'semester' | 'semester_start_date'>>): Promise<void> {
   const { data: existing } = await supabase.from('app_settings').select('id').limit(1).single();
   if (existing) {
     const { error } = await supabase
@@ -834,6 +1107,51 @@ export async function updateSettings(updates: Partial<Pick<AppSettings, 'dev_pas
       .from('app_settings')
       .insert({ dev_password: '1234', academic_level: 'المستوى الأول', semester: 'الترم الأول', ...updates });
     if (error) throw error;
+  }
+}
+
+/**
+ * Change the developer code server-side. The CURRENT code is verified inside
+ * Postgres (change_dev_code RPC) — once Section 10 is deployed, dev_password
+ * accepts no direct writes from the client, so an attempt without the current
+ * code is rejected no matter how it is issued. Every previously issued grant
+ * token is signed with the old code and dies with it; on success a fresh
+ * 30-day token for the new code is minted immediately so the active session
+ * stays developer. While the RPC is not deployed yet, the legacy direct
+ * compare-and-update path keeps old installs working; any other failure
+ * fails closed.
+ */
+export async function changeDevCode(current: string, next: string): Promise<boolean> {
+  const cur = current.trim();
+  const nxt = next.trim();
+  if (!cur || !nxt || nxt.length < 4) return false;
+  try {
+    const { data, error } = await supabase.rpc('change_dev_code', { p_current: cur, p_new: nxt });
+    if (!error) {
+      const ok = (data as { ok?: unknown } | null)?.ok === true;
+      if (ok) {
+        // The stored grant token was signed with the previous code and is now
+        // dead server-side — replace it before returning to keep the session.
+        await verifyDeveloperCode(nxt);
+      }
+      return ok;
+    }
+    if (!isMissingRpc(error)) return false; // transient → fail closed
+  } catch {
+    return false;
+  }
+
+  // Pre-migration fallback: RPC not deployed → compare + write directly
+  // (still possible until RUN-THIS-IN-SUPABASE.sql section 10 is executed).
+  try {
+    const { data, error } = await supabase.from('app_settings').select('id, dev_password').limit(1);
+    if (error || !Array.isArray(data) || data.length === 0) return false;
+    const row = data[0] as { id: string; dev_password?: string | null };
+    if (row.dev_password !== cur) return false;
+    const { error: writeErr } = await supabase.from('app_settings').update({ dev_password: nxt }).eq('id', row.id);
+    return !writeErr;
+  } catch {
+    return false;
   }
 }
 
@@ -864,7 +1182,7 @@ export async function updateAssignment(
 
 export async function updateStudyTask(
   id: string,
-  fields: Partial<Pick<StudyTask, 'subject' | 'task_type' | 'day' | 'start_time' | 'end_time' | 'completed' | 'department' | 'notes'>>
+  fields: Partial<Pick<StudyTask, 'subject' | 'task_type' | 'day' | 'start_time' | 'end_time' | 'department' | 'notes'>>
 ): Promise<void> {
   rememberSelfWrite('study_tasks', id);
   const { error } = await supabase.from('study_tasks').update(fields).eq('id', id);

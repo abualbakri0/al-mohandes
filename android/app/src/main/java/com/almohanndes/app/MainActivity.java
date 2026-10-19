@@ -28,8 +28,16 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         if (!isTamperFree()) {
-            Log.e(TAG, "Integrity check failed (repackaged or debuggable release) — aborting");
             finish();
+            // Fail closed: terminate the process so a repackaged/debugged
+            // release build cannot continue past the gate.
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try { Thread.sleep(400); } catch (InterruptedException ignored) { }
+                    android.os.Process.killProcess(android.os.Process.myPid());
+                    System.exit(10);
+                }
+            }).start();
             return;
         }
         super.onCreate(savedInstanceState);
@@ -43,6 +51,10 @@ public class MainActivity extends BridgeActivity {
         }
         // A release build must never run with the debuggable flag.
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            return false;
+        }
+        // Refuse dynamic debugging/tracing of a signed release build.
+        if (android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()) {
             return false;
         }
         Signature[] signatures = currentSignatures();

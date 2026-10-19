@@ -20,7 +20,7 @@ import InstallPrompt from '@/components/InstallPrompt';
 import PullToRefresh from '@/components/PullToRefresh';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 import { useToast } from '@/components/ToastProvider';
-import { fetchSettings, checkRegistration, useSectionBadges, clearSection, seedSectionBadges } from '@/lib/api';
+import { fetchSettings, checkRegistration, useSectionBadges, clearSection, seedSectionBadges, isDeveloperSession, setDeveloperSession, validateDeveloperGrant } from '@/lib/api';
 import { flushQueue } from '@/lib/offlineSync';
 import { pendingCount } from '@/lib/offlineStore';
 import { useNightAlerts } from '@/hooks/useNightAlerts';
@@ -97,6 +97,18 @@ function App() {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [introDone, setIntroDone] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('schedule');
+  // Server-validated developer grant — never a raw localStorage flag.
+  const [devGrant, setDevGrant] = useState(false);
+  const refreshDevGrant = useCallback(() => {
+    // Immediate signal from the signed token (if any), then the authoritative
+    // server-side check (verify_dev_token). A forged `is_dev` grants nothing.
+    setDevGrant(isDeveloperSession());
+    void validateDeveloperGrant()
+      .then((ok) => setDevGrant(ok))
+      .catch(() => {
+        /* keep the last known value */
+      });
+  }, []);
 
   // جلب بيانات التهيئة من Supabase بالتوازي مع عرض الشاشة —
   // لا ننتقل للرئيسية إلا بعد اكتمال الجلب AND انقضاء المدة الدنيا.
@@ -259,7 +271,7 @@ function App() {
 
   const isDeveloper =
     (user?.name === DEV_NAME && user?.phone === DEV_PHONE) ||
-    localStorage.getItem('is_dev') === 'true';
+    devGrant;
 
   const userDepartment: Department | null = isDeveloper ? null : user?.department ?? null;
 
@@ -313,12 +325,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+    refreshDevGrant();
     const stored = localStorage.getItem('univ_user');
     if (stored) {
       try {
         const parsed = JSON.parse(stored) as Registration;
-        const isDev = localStorage.getItem('is_dev') === 'true' ||
-          (parsed.name === DEV_NAME && parsed.phone === DEV_PHONE);
+        // Auth Guard: reject forged/malformed stored sessions (direct-URL
+        // or hand-crafted localStorage must never unlock inner pages).
+        const phoneOk = typeof parsed?.phone === 'string' && /^7\d{8}$/.test(parsed.phone.replace(/\D/g, ''));
+        const idOk = typeof parsed?.id === 'string' && parsed.id.length >= 8;
+        const nameOk = typeof parsed?.name === 'string' && parsed.name.trim().length > 0;
+        if (!phoneOk || !idOk || !nameOk) {
+          localStorage.removeItem('univ_user');
+          setDeveloperSession(false);
+          setUser(null);
+          setCheckingAuth(false);
+          fetchSettings().then(setSettings).catch(() => {});
+          return;
+        }
+        // Developer shortcut only for the real developer identity; the
+        // localStorage flag no longer grants (validated via refreshDevGrant).
+        const isDev = parsed.name === DEV_NAME && parsed.phone === DEV_PHONE;
         if (isDev) {
           setUser(parsed);
           setCheckingAuth(false);
@@ -339,7 +366,7 @@ function App() {
             setUser(fresh);
           } else if (fresh && !fresh.is_approved) {
             localStorage.removeItem('univ_user');
-            localStorage.removeItem('is_dev');
+            setDeveloperSession(false);
             setUser(null);
           }
         })();
@@ -351,7 +378,7 @@ function App() {
     }
     setCheckingAuth(false);
     fetchSettings().then(setSettings).catch(() => {});
-  }, []);
+  }, [refreshDevGrant]);
 
   const handleTabChange = useCallback((tab: TabId) => {
     setActiveTab(tab);
@@ -466,7 +493,8 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('univ_user');
-    localStorage.removeItem('is_dev');
+    setDeveloperSession(false);
+    setDevGrant(false);
     setUser(null);
   };
 
@@ -488,7 +516,7 @@ function App() {
   }
 
   if (!user) {
-    return <RegistrationGate onRegistered={(r) => setUser(r)} />;
+    return <RegistrationGate onRegistered={(r) => { setUser(r); refreshDevGrant(); }} />;
   }
 
   const showBanner = nightAlert && !bannerDismissed;

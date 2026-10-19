@@ -90,6 +90,11 @@ android {
             // Enable code shrinking, obfuscation and optimization to protect the source code
             minifyEnabled true
             shrinkResources true
+            // Hardening: never allow a debuggable/join-release build to ship.
+            debuggable false
+            jniDebuggable false
+            renderscriptDebuggable false
+            zipAlignEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

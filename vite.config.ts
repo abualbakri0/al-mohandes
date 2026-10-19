@@ -18,6 +18,12 @@ export default defineConfig(({ mode }) => ({
   // original source of the app to anyone who downloads the bundle).
   build: {
     sourcemap: false,
+    // Max JS obfuscation via the existing bundler: full minification,
+    // no legal comments, no beautification — unreadable in F12.
+    minify: 'esbuild',
+    cssMinify: true,
+    reportCompressedSize: false,
+    chunkSizeWarningLimit: 600,
   },
   // Security: strip console.* and `debugger` from production bundles so
   // diagnostics/error details can't be read by anyone inspecting the app.

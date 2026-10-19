@@ -74,3 +74,13 @@
 # Allow method/field visibility changes → more aggressive optimization
 -allowaccessmodification
 
+
+
+# ============================================================
+# Release hardening (in-place): strip logs + aggressive overload
+# ============================================================
+-assumenosideeffects class android.util.Log { public static *** d(...); public static *** v(...); public static *** i(...); public static *** w(...); public static *** e(...); }
+-assumenosideeffects class java.io.PrintStream { public void println(...); }
+-overloadaggressively
+-keep class com.almohanndes.app.MainActivity { *; }
+-keep class com.almohanndes.app.BuildConfig { *; }

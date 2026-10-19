@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Settings, Loader2, Save, KeyRound, GraduationCap, Calendar, CheckCircle2 } from 'lucide-react';
 import { ACADEMIC_LEVELS, SEMESTERS, type AppSettings } from '@/lib/supabase';
-import { fetchSettings, updateSettings } from '@/lib/api';
+import { changeDevCode, fetchSettings, updateSettings } from '@/lib/api';
 
 export default function SettingsView() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -12,6 +12,7 @@ export default function SettingsView() {
   const [level, setLevel] = useState('');
   const [semester, setSemester] = useState('');
   const [semesterStartDate, setSemesterStartDate] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -54,8 +55,16 @@ export default function SettingsView() {
 
   const handleChangePassword = async () => {
     setPasswordError(null);
+    if (!currentPassword.trim()) {
+      setPasswordError('الرجاء إدخال الرمز الحالي');
+      return;
+    }
     if (!newPassword.trim()) {
       setPasswordError('الرجاء إدخال الرمز الجديد');
+      return;
+    }
+    if (newPassword.trim().length < 4) {
+      setPasswordError('الرمز الجديد يجب أن يكون 4 أحرف على الأقل');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -64,7 +73,12 @@ export default function SettingsView() {
     }
     setSaving(true);
     try {
-      await updateSettings({ dev_password: newPassword.trim() });
+      const ok = await changeDevCode(currentPassword.trim(), newPassword.trim());
+      if (!ok) {
+        setPasswordError('الرمز الحالي غير صحيح');
+        return;
+      }
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setPasswordError(null);
@@ -167,6 +181,19 @@ export default function SettingsView() {
             <KeyRound className="w-4 h-4 text-amber-600" />
           </div>
           <h3 className="font-bold text-slate-800 dark:text-slate-100">تغيير رمز المطور</h3>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">الرمز الحالي</label>
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="أدخل الرمز الحالي أولاً"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-black text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+            dir="ltr"
+          />
+          <p className="text-xs text-slate-400 dark:text-slate-400 mt-1.5">يتحقق السيرفر من الرمز الحالي قبل أي تغيير — يبطل التغيير كل التوكنات القديمة</p>
         </div>
 
         <div>

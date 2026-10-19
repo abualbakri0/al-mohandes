@@ -1,9 +1,10 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { GraduationCap, UserPlus, Loader2, Phone, User as UserIcon, CalendarDays, BookOpen, Bell, Cpu, Zap, KeyRound, Shield, Clock, RefreshCw, ArrowRight, Lock, Eye, EyeOff, HelpCircle, WifiOff } from 'lucide-react';
-import { addRegistration, checkRegistration, verifyPassword, setUserPassword, type Registration } from '@/lib/api';
+import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, type Registration } from '@/lib/api';
 import { fetchSettings } from '@/lib/api';
+import type { AppSettings } from '@/lib/supabase';
 import { useToast } from '@/components/ToastProvider';
-import type { Department, AppSettings } from '@/lib/supabase';
+import type { Department } from '@/lib/supabase';
 
 const APP_NAME = 'المهندس';
 
@@ -27,7 +28,6 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
   const [showPassword, setShowPassword] = useState(false);
   const [devCode, setDevCode] = useState('');
   const [showDevField, setShowDevField] = useState(false);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gateState, setGateState] = useState<GateState>('login');
@@ -39,8 +39,22 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
 
+  // Display-only settings (academic level + semester) for the header badge.
+  // Security: fetchSettings never returns dev_password — the developer code
+  // is verified server-side through the verify_developer_code RPC.
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   useEffect(() => {
-    fetchSettings().then(setSettings).catch(() => {});
+    let cancelled = false;
+    fetchSettings()
+      .then((s) => {
+        if (!cancelled) setSettings(s);
+      })
+      .catch(() => {
+        /* display-only */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Keep the gate's connectivity flag in sync with the browser/WebView.
@@ -101,11 +115,20 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       return;
     }
 
+    // Security: developer code is verified server-side (verify_developer_code
+    // RPC). dev_password is never shipped to the browser anymore.
     let isDev = false;
-    if (devCode.trim() && settings) {
-      if (devCode.trim() === settings.dev_password) {
-        isDev = true;
-      } else {
+    if (devCode.trim()) {
+      setLoading(true);
+      setError(null);
+      try {
+        isDev = await verifyDeveloperCode(devCode);
+      } catch {
+        isDev = false;
+      } finally {
+        setLoading(false);
+      }
+      if (!isDev) {
         setError('رمز المطور غير صحيح');
         return;
       }
@@ -135,7 +158,6 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       const passwordFeatureEnabled = existing.password_hash !== undefined;
       if (!passwordFeatureEnabled) {
         localStorage.setItem('univ_user', JSON.stringify(existing));
-        if (isDev) localStorage.setItem('is_dev', 'true');
         onRegistered(existing);
         return;
       }
@@ -160,7 +182,6 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       }
 
       localStorage.setItem('univ_user', JSON.stringify(existing));
-      if (isDev) localStorage.setItem('is_dev', 'true');
       onRegistered(existing);
     } catch {
       setError(
@@ -203,11 +224,20 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       return;
     }
 
+    // Security: developer code is verified server-side (verify_developer_code
+    // RPC). Never compare dev_password in the browser.
     let isDev = false;
-    if (devCode.trim() && settings) {
-      if (devCode.trim() === settings.dev_password) {
-        isDev = true;
-      } else {
+    if (devCode.trim()) {
+      setLoading(true);
+      setError(null);
+      try {
+        isDev = await verifyDeveloperCode(devCode);
+      } catch {
+        isDev = false;
+      } finally {
+        setLoading(false);
+      }
+      if (!isDev) {
         setError('رمز المطور غير صحيح');
         return;
       }
@@ -225,7 +255,6 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
     try {
       const reg = await addRegistration(name.trim(), phoneDigits, department, password);
       if (isDev) {
-        localStorage.setItem('is_dev', 'true');
         localStorage.setItem('univ_user', JSON.stringify(reg));
         onRegistered(reg);
       } else {

@@ -66,8 +66,12 @@ async function executeOp(op: QueuedOp): Promise<void> {
       if (op.action === 'insert') {
         await addStudyTask(p.subject, p.task_type, p.day, p.start_time, p.end_time, p.department ?? null, p.notes ?? null);
       } else if (op.action === 'update') {
-        if (p.toggleCompleted !== undefined) await updateStudyTask(p.id, { completed: p.toggleCompleted });
-        else await updateStudyTask(p.id, p.fields);
+        // Legacy queue entries from old builds carried `toggleCompleted` and
+        // wrote the SHARED study_tasks.completed column — that column is dead
+        // (reset by the per-user migration). Drop such entries so they can
+        // never revive the shared-checkmark bug; current toggles queue the
+        // custom 'set' op handled above, which writes user_study_progress.
+        if (p.toggleCompleted === undefined) await updateStudyTask(p.id, p.fields);
       } else if (op.action === 'delete') {
         await deleteStudyTask(p.id);
       }
