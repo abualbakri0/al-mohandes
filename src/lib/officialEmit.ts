@@ -79,6 +79,24 @@ export async function emitOfficialEvent(args: EmitArgs): Promise<void> {
   const { table, id, title, body, tab, showToast, goToTab, urgent = false, evt = 'insert', skipBadge = false, durationMs } = args;
   const preferences = getNotificationPrefs().contentAlerts;
   if (!preferences) return;
+  // ── التحقق الأمني عند استلام الإشعار (قبل العرض) ──
+  // للمحذوف قطعاً: إبطال الارتباطات + خروج محلي + إلغاء المجدولات،
+  // ثم إسقاط هذا الإشعار (لا يُعرض لمستخدم محذوف).
+  // لأي حالة غير مؤكدة (timeout/خطأ/موجود): يُعرض الإشعار طبيعياً.
+  // Throttle داخلي (5 دقائق) يمنع فحص الشبكة مع كل إشعار.
+  // لا يمس منطق العرض نفسه — فقط بوابة أمنية قبله.
+  try {
+    const { guardDeletedUser } = await import('@/lib/deletedGuard');
+    const wasDeleted = await guardDeletedUser({
+      doLocalLogout: () => {
+        try { localStorage.removeItem('univ_user'); } catch { /* ignore */ }
+      },
+      notifyUser: (t, m) => {
+        try { showToast(t, m, 'error'); } catch { /* ignore */ }
+      },
+    }).catch(() => false);
+    if (wasDeleted) return; // محذوف → أُبطلت ارتباطاته وسُجّل خروجه → لا تعرض
+  } catch { /* ignore — أي عطل في الحارس لا يمنع العرض */ }
   const seen = markSeen(table, id, evt);
   if (!seen) return;
   // Record the unseen badge for this section so the nav item lights up.

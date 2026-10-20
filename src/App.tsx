@@ -30,6 +30,7 @@ import { useOfficialRealtime } from '@/hooks/useOfficialRealtime';
 import { useLectureReminders } from '@/hooks/useLectureReminders';
 import { requestNativePermission, onNativeNotificationTap } from '@/lib/nativeNotifications';
 import { bindPushDisplay, initPush, setPushDepartment } from '@/lib/push';
+import { guardDeletedUser, resetDeletedGuard, ACCOUNT_DELETED_EVENT, invalidateDeviceLinks } from '@/lib/deletedGuard';
 import { initWebPush, setWebPushDepartment } from '@/lib/webPush';
 import { setAppBadge, clearAppBadge } from '@/lib/appBadge';
 import { useTheme } from '@/hooks/useTheme';
@@ -296,6 +297,7 @@ function App() {
   // Request OFFICIAL notification permission on login (system bar, WhatsApp-style)
   useEffect(() => {
     if (user) {
+      try { resetDeletedGuard(); } catch { /* ignore */ } // جلسة جديدة → فحص جديد
       requestNativePermission().catch(() => {});
       requestNotificationPermission().catch(() => {});
     }
@@ -360,10 +362,30 @@ function App() {
           setUser(parsed);
           setCheckingAuth(false);
           void (async () => {
-            const fresh = await Promise.race([
-              checkRegistration(parsed.phone),
-              new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
-            ]).catch(() => null);
+            // ── فحص المستخدم المحذوف عند الإقلاع (خلفية فقط) ──
+            // عبر وحدة الحارس المشتركة (deletedGuard): الجلسة تُستعاد فوراً
+            // أعلاه ولا تُمس. الخروج الإجباري + إبطال الارتباطات يتم فقط
+            // عند الثبوت القطعي للحذف (null مؤكد شبكياً — ليس timeout/خطأ).
+            const wasDeleted = await guardDeletedUser({
+              doLocalLogout: () => {
+                setDeveloperSession(false);
+                setUser(null);
+              },
+              notifyUser: (t, m) => showToast(t, m, 'error'),
+            }).catch(() => false);
+            if (wasDeleted) return; // تم التعامل (خروج + إبطال ارتباطات + رسالة)
+            // الحساب موجود ومقبول → حدّث النسخة المحلية كالسابق.
+            const UNKNOWN = Symbol('unknown');
+            let fresh: Registration | null | typeof UNKNOWN = UNKNOWN;
+            try {
+              fresh = await Promise.race([
+                checkRegistration(parsed.phone),
+                new Promise<typeof UNKNOWN>((resolve) => setTimeout(() => resolve(UNKNOWN), 8000)),
+              ]);
+            } catch {
+              fresh = UNKNOWN; // خطأ شبكي → ليس حذفاً → إبقاء الجلسة
+            }
+            if (fresh === UNKNOWN) return; // timeout/خطأ → إبقاء الجلسة بصمت تام
             if (fresh && fresh.is_approved) {
               localStorage.setItem('univ_user', JSON.stringify(fresh));
               setUser(fresh);
@@ -372,6 +394,8 @@ function App() {
               setDeveloperSession(false);
               setUser(null);
             }
+            // ملاحظة: حالة fresh === null (محذوف) عُولجت أعلاه عبر الحارس
+            // (خروج + إبطال ارتباطات + إلغاء مجدولات + رسالة) — لا تكرار هنا.
           })();
         };
 
@@ -516,11 +540,72 @@ function App() {
     setPushDepartment(userDepartment, isDeveloper);
     setWebPushDepartment(userDepartment, isDeveloper);
   }, [userDepartment, isDeveloper]);
+  // ── إعادة تسجيل توكن الإشعارات بعد الدخول ──
+  // عند الخروج/الحذف يُمسح التوكن محلياً ويُلغى تسجيله من Firebase؛ أول
+  // دخول لاحق داخل نفس تشغيل التطبيق يستدعي initPush() لتوليد توكن جديد
+  // ورفعه إلى السيرفر — وإلا توقفت الإشعارات حتى إعادة تشغيل التطبيق.
+  const activeUserId = user?.id ?? null;
+  useEffect(() => {
+    if (!activeUserId) return;
+    void initPush();
+  }, [activeUserId]);
 
   // Scheduled native reminders: 60min + 15min before lectures, evening summary 19:00
   useLectureReminders(userDepartment, user?.name);
 
+  // ── فحص دوري للمستخدم المحذوف (جلسة نشطة) ──
+  // يعمل فقط أثناء وجود جلسة محلية، كل 15 دقيقة + عند عودة التطبيق للمقدمة.
+  // عبر وحدة الحارس المشتركة: لا إجراء إطلاقاً إلا عند الثبوت القطعي للحذف
+  // (null مؤكد شبكياً). timeout/خطأ/أوفلاين = إبقاء الجلسة بصمت تام.
+  // لا يمس نظام الإشعارات — فقط يبطل الارتباطات عند ثبوت الحذف.
+  // + مستمع حدث الحذف: إذا ثبت الحذف من أي مسار آخر (بوابة الإشعار)،
+  // تُحدَّث الواجهة فوراً (خروج لشاشة الدخول) دون انتظار الفحص التالي.
+  useEffect(() => {
+    const onDeleted = () => {
+      try { resetDeletedGuard(); } catch { /* ignore */ }
+      setDeveloperSession(false);
+      setUser(null);
+    };
+    window.addEventListener(ACCOUNT_DELETED_EVENT, onDeleted);
+    return () => window.removeEventListener(ACCOUNT_DELETED_EVENT, onDeleted);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const runCheck = () => {
+      if (cancelled) return;
+      void guardDeletedUser({
+        doLocalLogout: () => {
+          setDeveloperSession(false);
+          setUser(null);
+        },
+        notifyUser: (t, m) => showToast(t, m, 'error'),
+      }).catch(() => {});
+    };
+    const interval = setInterval(runCheck, 15 * 60_000);
+    const onForeground = () => runCheck();
+    window.addEventListener('focus', onForeground);
+    document.addEventListener('visibilitychange', onForeground);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener('focus', onForeground);
+      document.removeEventListener('visibilitychange', onForeground);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
   const handleLogout = () => {
+    // ── الحالة الثانية (الخروج اليدوي فقط): تنظيف FCM Token فوراً ──
+    // قبل مسح الجلسة المحلية: حذف/تصفير توكن هذا الجهاز من جدول push_tokens
+    // (مع مسار احتياطي alerts_enabled=false إذا رفضت السياسات الـ DELETE)،
+    // وإلغاء اشتراك Web Push من السيرفر، ومسح التوكن محلياً وإلغاء تسجيله
+    // من Firebase — فيكفّ الجهاز تماماً عن استقبال الإشعارات.
+    // fire-and-forget — لا يمنع الخروج أبداً. (لا يمس أي جزء آخر من نظام
+    // الإشعارات — باب الجلسة في uploadPushToken يمنع أي رفع لاحق.)
+    try { invalidateDeviceLinks(); } catch { /* ignore */ }
+    try { resetDeletedGuard(); } catch { /* ignore */ }
     localStorage.removeItem('univ_user');
     if (user) clearProgressKey(user.id);
     setDeveloperSession(false);

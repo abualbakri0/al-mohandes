@@ -86,6 +86,18 @@ export function useLectureReminders(department: Department | null, userName?: st
       if (rescheduling) return;
       rescheduling = true;
       try {
+      // ── لا جلسة (تسجيل خروج يدوي أو حذف حساب) → لا تذكيرات محلية ──
+      // userName يصبح فارغاً فور خروج المستخدم: نُلغي كل المهام المجدولة
+      // على الجهاز ولا نجدول أي شيء جديد — لا يستمر أي إشعار محلي بعد
+      // الخروج. المطوّر يمرّ هنا بشكل طبيعي باسمه (قسمه null مقصود —
+      // جدوله يبقى كما هو).
+      if (!nameRef.current) {
+        if (scheduledIds.current.length > 0) {
+          await cancelNativeReminders(scheduledIds.current);
+          if (myGen === generation.current && !cancelled) scheduledIds.current = [];
+        }
+        return;
+      }
       const prefs = getNotificationPrefs();
       // Clear old schedules first
       if (scheduledIds.current.length > 0) {
@@ -120,7 +132,17 @@ export function useLectureReminders(department: Department | null, userName?: st
 
       // 1) Lecture reminders (60 + 15 min before)
       if (prefs.lectureReminders) {
+        // ── الاستثناء 1 (تخطي منبه المحاضرة المؤجلة) ──
+        // أي حصة مطابقة لقائمة التخطي المحلية (مادة + يوم + وقت) تُتخطى:
+        // تلك الحصة المستهدفة فقط — دون المساس بباقي محاضرات اليوم
+        // أو الجدول الأسبوعي للأيام القادمة. الفحص محلي خالص.
+        let isPostponed: (s: string, d: string, t: string) => boolean = () => false;
+        try {
+          const mod = await import('@/lib/postponementSkip').catch(() => null);
+          if (mod) isPostponed = mod.isLecturePostponed;
+        } catch { /* ignore — عند العطل تُجدول كل المنبهات كالسابق */ }
         for (const lec of items) {
+          if (isPostponed(lec.subject, lec.day, lec.start_time)) continue; // حصة مؤجلة → تخطي
           const start = nextDateForDay(lec.day, lec.start_time);
           if (!start) continue;
           // Only schedule within next 8 days

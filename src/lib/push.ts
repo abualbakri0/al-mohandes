@@ -58,6 +58,58 @@ export function clearPushToken(): void {
   } catch {
     // ignore
   }
+  // ── إلغاء تسجيل خدمة الإشعارات على الجهاز (أفضل مجهود) ──
+  // هذه الدالة هي نقطة العبور الوحيدة لمسارَي "الخروج اليدوي" و"الحذف من
+  // السيرفر": بعد مسح النسخة المحلية نحذف توكن FCM من Firebase نفسه
+  // (deleteToken) فيكفّ الجهاز تماماً عن الخدمة. أي دخول لاحق يستدعي
+  // initPush() فتُولَّد توكناً جديداً ويُرفع إلى السيرفر. أصلي فقط، لا يمس
+  // أي جزء آخر من نظام الإشعارات.
+  try {
+    if (Capacitor.isNativePlatform()) {
+      void PushNotifications.unregister().catch(() => {
+        /* أفضل جهد — الصف في السيرفر هو الفيصل دائماً */
+      });
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * الحالة الثانية (تنظيف التوكن عند الخروج اليدوي فقط):
+ * حذف صف FCM Token الخاص بهذا الجهاز من جدول `push_tokens` في السيرفر
+ * ثم تصفير النسخة المحلية — ليتوقف الجهاز عن استقبال الإشعارات بعد الخروج.
+ * - Fire-and-forget: لا ترمي استثناءً أبداً ولا تمنع إتمام الخروج.
+ * - المسح المحلي يتم أولاً وبشكل متزامن لمنع أي re-upload متسابق
+ *   (setPushDepartment/uploadPushToken) من إعادة إنشاء الصف بعد الحذف.
+ * - لا تمس أي جزء آخر من نظام الإشعارات.
+ */
+export function unregisterPushToken(): void {
+  let token: string | null = null;
+  try {
+    token = localStorage.getItem(TOKEN_KEY);
+  } catch {
+    token = null;
+  }
+  // Clear locally FIRST (sync) to win any re-upload race.
+  clearPushToken();
+  if (!token) return;
+  const doomed = token;
+  void (async () => {
+    try {
+      const { error } = await supabase.from('push_tokens').delete().eq('token', doomed);
+      if (!error) return; // حُذف — انتهى
+      // DELETE مرفوض من سياسات RLS → عطّل الصف بدل حذفه (نفس الأثر:
+      // دالة push-notify في السيرفر تتخطى أي صف alerts_enabled=false).
+      const u = await supabase
+        .from('push_tokens')
+        .update({ alerts_enabled: false, last_seen_at: new Date().toISOString() })
+        .eq('token', doomed);
+      if (u.error) console.warn('[push] token disable failed', u.error.message);
+    } catch (e) {
+      console.warn('[push] token delete failed', e);
+    }
+  })();
 }
 
 export function isPushCapable(): boolean {
@@ -85,6 +137,16 @@ export function setPushDepartment(dept: Department | null, isDeveloper = false):
 async function uploadPushToken(): Promise<void> {
   const token = getStoredPushToken();
   if (!token) return;
+  // ── باب الجلسة: جهاز بلا جلسة مستخدم (خروج/حذف) لا يُرفع توكنه أبداً ──
+  // يمنع إعادة إحياء صف push_tokens بعد حذفه (دوران توكن FCM، حدث
+  // registration متأخر، تغيّر تفضيلات…) — وإلا بقي جهاز مسجّل خروجه
+  // مستقبلاً إشعارات البث (department NULL يُعامَل كبث في push-notify).
+  // عند الدخول لاحقاً يعيد setPushDepartment الرفع تلقائياً بتغيّر القسم.
+  try {
+    if (!localStorage.getItem('univ_user')) return;
+  } catch {
+    return; // تخزين غير قابل للقراءة → لا رفع
+  }
   try {
     const { error } = await supabase.from('push_tokens').upsert(
       {
@@ -123,6 +185,18 @@ function handleForegroundPush(n: { data?: unknown; notification?: { title?: stri
     if (data.evt === 'update' && consumeSelfWrite(table, id)) {
       markSeen(table, id, 'update');
       return;
+    }
+    // ── الاستثناء 1 (مسار FCM الأمامي): إشعار تأجيل يصل والتطبيق مفتوح —
+    // سجّل الحصة المستهدفة في قائمة التخطي (نفس منطق Realtime).
+    if (data.urgent === 'true' && table === 'notifications') {
+      try {
+        const title = n.notification?.title ?? '';
+        const body = n.notification?.body ?? '';
+        void import('@/lib/postponementSkip').then((m) => {
+          const parsed = m.parsePostponement(title, body);
+          if (parsed) m.markLecturePostponed(parsed.subject, parsed.day, parsed.startTime);
+        }).catch(() => {});
+      } catch { /* ignore */ }
     }
     void emitOfficialEvent({
       table,
@@ -166,8 +240,19 @@ export async function initPush(): Promise<PushRegistration | null> {
   }
 
   if (initialized) {
+    // التوكن يُمسح عند الخروج اليدوي/الحذف (محلياً ومن Firebase): عند أي
+    // دخول لاحق داخل نفس التشغيل نعيد التسجيل — الإضافة تُطلق حدث
+    // 'registration' فيخزّن المُستمع التوكن ويرفعه تلقائياً إلى السيرفر.
+    if (!stored) {
+      try {
+        await PushNotifications.register();
+      } catch (e) {
+        console.warn('[push] re-register failed', e);
+      }
+    }
     await uploadPushToken();
-    return stored ? { token: stored, platform: 'android' } : null;
+    const now = getStoredPushToken();
+    return now ? { token: now, platform: 'android' } : null;
   }
   initialized = true;
 

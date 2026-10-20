@@ -109,6 +109,17 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
         // Developer self-adds must ALSO alert on this device (no self-suppression for INSERT).
         consumeSelfWrite('notifications', row.id);
         const urgent = row.notification_type === 'postponement';
+        // ── الاستثناء 1 (تأجيل محاضرة): استخراج الحصة المستهدفة من نص
+        // الإشعار وحفظ بصمتها في قائمة التخطي المحلية — فيتخطى منبهها
+        // (قبلها بساعة) تلك الحصة فقط دون المساس بباقي المنبهات.
+        if (urgent) {
+          try {
+            void import('@/lib/postponementSkip').then((m) => {
+              const parsed = m.parsePostponement(row.title, row.message);
+              if (parsed) m.markLecturePostponed(parsed.subject, parsed.day, parsed.startTime);
+            }).catch(() => {});
+          } catch { /* ignore — التخطي تكميلي ولا يمنع العرض */ }
+        }
         emitNow('notifications', row.id, `${urgent ? '🚨 ' : '🔔 '}${row.title}`, row.message, 'notifications', urgent);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications' }, (payload) => {

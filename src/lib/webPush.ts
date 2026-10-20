@@ -63,6 +63,15 @@ export function setWebPushDepartment(dept: Department | null, isDeveloper = fals
 
 async function uploadWebSubscription(): Promise<void> {
   if (!currentEndpoint) return;
+  // ── باب الجلسة: بلا جلسة مستخدم لا يُرفع الاشتراك ── (يمنع إعادة إحياء
+  // صف web_push_subscriptions بعد خروج/حذف المستخدم — نفس منطق
+  // uploadPushToken في push.ts). عند الدخول يعيد setWebPushDepartment
+  // الرفع تلقائياً بتغيّر القسم.
+  try {
+    if (!localStorage.getItem('univ_user')) return;
+  } catch {
+    return;
+  }
   try {
     const reg = await navigator.serviceWorker.getRegistration();
     const sub = await reg?.pushManager?.getSubscription();

@@ -5,6 +5,7 @@ import { fetchStudyTasks, addStudyTask, updateStudyTask, deleteStudyTask, fetchS
 import { fetchWithCache, isPendingId, updateQueuedOp, dequeue } from '@/lib/offlineStore';
 import { runOrQueue } from '@/lib/offlineSync';
 import { useToast } from '@/components/ToastProvider';
+import WeeklyAnalytics from '@/components/WeeklyAnalytics';
 
 type Props = {
   isDeveloper: boolean;
@@ -492,6 +493,9 @@ export default function StudyView({ isDeveloper, userId, department }: Props) {
           </div>
         </div>
       )}
+
+      {/* تقرير الإنجاز الأسبوعي — لوحة محلية فقط (لا استعلامات/لا DB/لا جلسات/لا إشعارات). */}
+      <WeeklyAnalytics visibleTasks={visibleTasks} isDone={isDone} userId={userId} />
 
       {showForm && isDeveloper && (
         <form
