@@ -1406,8 +1406,45 @@ export async function updateNotification(
   fields: Partial<Pick<Notification, 'title' | 'message' | 'notification_type' | 'department'>>
 ): Promise<void> {
   rememberSelfWrite('notifications', id);
-  const { error } = await supabase.from('notifications').update(fields).eq('id', id);
-  if (error) throw error;
+  // ── لماذا حذف + إدراج بدل UPDATE مباشر؟ ──
+  // جدول notifications يملك سياسات SELECT/INSERT/DELETE فقط (بدون UPDATE)
+  // — وأي UPDATE مباشر من العميل يُصفِّر الصفوف المتأثرة بصمت (0 صفوف، بلا
+  // خطأ) في "ينجح" التعديل ظاهرياً ثم تعود القائمة بالنص القديم. نُنفّذ
+  // التعديل بنفس المعرّف ووقت الإنشاء عبر المسارات المسموحة — نفس النتيجة
+  // النهائية، بترتيب ثابت، ودون أي تغيير على RLS أو البنية أو الإشعارات.
+  const { data: existing, error: readError } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (readError) throw readError;
+
+  const { error: deleteError } = await supabase.from('notifications').delete().eq('id', id);
+  if (deleteError) throw deleteError;
+
+  const row = {
+    id,
+    created_at: existing?.created_at ?? new Date().toISOString(),
+    title: fields.title ?? existing?.title ?? '',
+    message: fields.message ?? existing?.message ?? '',
+    notification_type: fields.notification_type ?? existing?.notification_type ?? 'general',
+    department: fields.department !== undefined ? fields.department : (existing?.department ?? null),
+  };
+  const insertOnce = async () => {
+    const { error } = await supabase.from('notifications').insert(row);
+    if (error) throw error;
+  };
+  try {
+    await insertOnce();
+  } catch (e) {
+    // فشل شبكة ضيق بين الحذف والإدراج → محاولة ثانية تفاديًا لفقدان الإشعار.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    try {
+      await insertOnce();
+    } catch {
+      throw e;
+    }
+  }
 }
 
 export async function updateExam(
