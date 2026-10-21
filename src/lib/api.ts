@@ -787,13 +787,26 @@ async function progressRpc(
  * ============================================================
  */
 
+/**
+ * Drop a key the server no longer recognises (its `student_keys` row was reset
+ * or lost). Without this the device keeps sending a dead key forever: every
+ * read throws and every write stays stuck in the offline queue. Clearing it
+ * makes the boot gate ask for the password once and mint a fresh key.
+ */
+function handleRejectedKey(userId: string, payload: Record<string, unknown>): void {
+  if (payload.reason === 'bad_key') clearProgressKey(userId);
+}
+
 /** This student's completion map: { [assignment_id]: completed }. */
 export async function fetchAssignmentProgress(userId: string): Promise<Record<string, boolean>> {
   const key = readProgressKey(userId);
   if (key) {
     const res = await progressRpc('progress_fetch', { p_user_id: userId, p_key: key, p_kind: 'assignment' });
     if (res) {
-      if (!res.ok) throw new Error('progress key rejected');
+      if (!res.ok) {
+        handleRejectedKey(userId, res.payload);
+        throw new Error('progress key rejected');
+      }
       return (res.payload.map as Record<string, boolean> | undefined) ?? {};
     }
     // RPC not deployed yet → legacy direct read below.
@@ -822,7 +835,10 @@ export async function setAssignmentProgress(assignmentId: string, userId: string
     if (res) {
       // !ok = pending/unknown item or a rejected key → queue/keep local,
       // exactly like the legacy path's FK/cast error.
-      if (!res.ok) throw new Error('progress write rejected');
+      if (!res.ok) {
+        handleRejectedKey(userId, res.payload);
+        throw new Error('progress write rejected');
+      }
       return;
     }
     // RPC not deployed yet → legacy direct upsert below.
@@ -913,7 +929,10 @@ export async function fetchStudyProgress(userId: string): Promise<Record<string,
   if (key) {
     const res = await progressRpc('progress_fetch', { p_user_id: userId, p_key: key, p_kind: 'study' });
     if (res) {
-      if (!res.ok) throw new Error('progress key rejected');
+      if (!res.ok) {
+        handleRejectedKey(userId, res.payload);
+        throw new Error('progress key rejected');
+      }
       return (res.payload.map as Record<string, boolean> | undefined) ?? {};
     }
     // RPC not deployed yet → legacy direct read below.
@@ -940,7 +959,10 @@ export async function setStudyTaskProgress(taskId: string, userId: string, compl
       p_completed: completed,
     });
     if (res) {
-      if (!res.ok) throw new Error('progress write rejected'); // queued by caller
+      if (!res.ok) {
+        handleRejectedKey(userId, res.payload);
+        throw new Error('progress write rejected'); // queued by caller
+      }
       return;
     }
     // RPC not deployed yet → legacy direct upsert below.
@@ -960,7 +982,10 @@ export async function resetStudyProgressForUser(userId: string): Promise<void> {
   if (key) {
     const res = await progressRpc('progress_reset_mine', { p_user_id: userId, p_key: key });
     if (res) {
-      if (!res.ok) throw new Error('progress key rejected');
+      if (!res.ok) {
+        handleRejectedKey(userId, res.payload);
+        throw new Error('progress key rejected');
+      }
       return;
     }
     // RPC not deployed yet → legacy direct delete below.
@@ -1406,12 +1431,13 @@ export async function updateNotification(
   fields: Partial<Pick<Notification, 'title' | 'message' | 'notification_type' | 'department'>>
 ): Promise<void> {
   rememberSelfWrite('notifications', id);
-  // ── لماذا حذف + إدراج بدل UPDATE مباشر؟ ──
-  // جدول notifications يملك سياسات SELECT/INSERT/DELETE فقط (بدون UPDATE)
-  // — وأي UPDATE مباشر من العميل يُصفِّر الصفوف المتأثرة بصمت (0 صفوف، بلا
-  // خطأ) في "ينجح" التعديل ظاهرياً ثم تعود القائمة بالنص القديم. نُنفّذ
-  // التعديل بنفس المعرّف ووقت الإنشاء عبر المسارات المسموحة — نفس النتيجة
-  // النهائية، بترتيب ثابت، ودون أي تغيير على RLS أو البنية أو الإشعارات.
+  // ══ الحالة الخاصة: جدول notifications لا يملك سياسة UPDATE في RLS ══
+  // (يوجد SELECT/INSERT/DELETE فقط). أي UPDATE مباشر من العميل يُحجب
+  // بصمت (0 صفوف، بدون خطأ) — فلا يثبت التعديل، ولا ينطلق trigger الدفع
+  // dispatch_push_notifications، فيتوقف الإشعار المنبثق للمستخدمين
+  // والتطبيق مغلق. لذلك ننفّذ التعديل كحذف + إدراج بنفس المعرّف (كلاهما
+  // مسموح)، فينطلق trigger الإدراج وتصل الإشعارات طبيعياً دون المساس
+  // بأي سياسة أمنية.
   const { data: existing, error: readError } = await supabase
     .from('notifications')
     .select('*')
@@ -1437,7 +1463,7 @@ export async function updateNotification(
   try {
     await insertOnce();
   } catch (e) {
-    // فشل شبكة ضيق بين الحذف والإدراج → محاولة ثانية تفاديًا لفقدان الإشعار.
+    // إعادة محاولة واحدة إذا حدث سباق بين الحذف والإدراج.
     await new Promise((resolve) => setTimeout(resolve, 1200));
     try {
       await insertOnce();

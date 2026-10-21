@@ -54,7 +54,7 @@ android {
         applicationId "com.almohanndes.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 20
+        versionCode 24
         versionName "1.0"
         // Integrity pin consumed by MainActivity's signature check.
         buildConfigField "String", "APP_SIGNER_SHA256", "\"${signerSha256}\""

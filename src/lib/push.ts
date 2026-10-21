@@ -58,21 +58,6 @@ export function clearPushToken(): void {
   } catch {
     // ignore
   }
-  // ── إلغاء تسجيل خدمة الإشعارات على الجهاز (أفضل مجهود) ──
-  // هذه الدالة هي نقطة العبور الوحيدة لمسارَي "الخروج اليدوي" و"الحذف من
-  // السيرفر": بعد مسح النسخة المحلية نحذف توكن FCM من Firebase نفسه
-  // (deleteToken) فيكفّ الجهاز تماماً عن الخدمة. أي دخول لاحق يستدعي
-  // initPush() فتُولَّد توكناً جديداً ويُرفع إلى السيرفر. أصلي فقط، لا يمس
-  // أي جزء آخر من نظام الإشعارات.
-  try {
-    if (Capacitor.isNativePlatform()) {
-      void PushNotifications.unregister().catch(() => {
-        /* أفضل جهد — الصف في السيرفر هو الفيصل دائماً */
-      });
-    }
-  } catch {
-    // ignore
-  }
 }
 
 /**
@@ -98,14 +83,7 @@ export function unregisterPushToken(): void {
   void (async () => {
     try {
       const { error } = await supabase.from('push_tokens').delete().eq('token', doomed);
-      if (!error) return; // حُذف — انتهى
-      // DELETE مرفوض من سياسات RLS → عطّل الصف بدل حذفه (نفس الأثر:
-      // دالة push-notify في السيرفر تتخطى أي صف alerts_enabled=false).
-      const u = await supabase
-        .from('push_tokens')
-        .update({ alerts_enabled: false, last_seen_at: new Date().toISOString() })
-        .eq('token', doomed);
-      if (u.error) console.warn('[push] token disable failed', u.error.message);
+      if (error) console.warn('[push] token delete failed', error.message);
     } catch (e) {
       console.warn('[push] token delete failed', e);
     }
@@ -133,36 +111,152 @@ export function setPushDepartment(dept: Department | null, isDeveloper = false):
   if (changed) void uploadPushToken();
 }
 
-/** Upsert token + prefs so the Edge Function can target/filter this device. */
+/**
+ * Upsert token + prefs so the Edge Function can target/filter this device.
+ *
+ * لماذا أُعيدت كتابة هذا الجزء:
+ * كان `.upsert()` المباشر يفشل دائماً على هذا المشروع:
+ *   POST /rest/v1/push_tokens?on_conflict=token  →  42501
+ *   "new row violates row-level security policy for table push_tokens"
+ * (سياسة SELECT/UPDATE مفقودة على الجدول)، أي أن **أي جهاز جديد لم يكن
+ * يُسجَّل إطلاقاً** ⇒ لا إشعارات في الخلفية. الحل ثلاثي المستويات:
+ *   1) RPC بصلاحية SECURITY DEFINER يتجاوز RLS (migration 20261022090000).
+ *   2) إن لم يكن موجوداً: INSERT عادي، ثم UPDATE عند التكرار (23505).
+ *   3) وأخيراً upsert (يعمل لو أُصلحت سياسات RLS).
+ * مع إعادة محاولة تلقائية متزايدة حتى لو كان الجهاز بلا شبكة لحظة التسجيل.
+ */
+const UPLOAD_RETRY_MS = [5_000, 20_000, 60_000, 180_000];
+let uploadAttempt = 0;
+let uploadRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function tokenUploaded(token: string): void {
+  uploadAttempt = 0;
+  if (uploadRetryTimer) {
+    clearTimeout(uploadRetryTimer);
+    uploadRetryTimer = null;
+  }
+  console.log('[push] token registered OK:', String(token).slice(0, 12) + '…', 'dept=', department);
+}
+
+function scheduleUploadRetry(): void {
+  if (uploadRetryTimer) return;
+  const delay = UPLOAD_RETRY_MS[Math.min(uploadAttempt, UPLOAD_RETRY_MS.length - 1)];
+  uploadAttempt += 1;
+  uploadRetryTimer = setTimeout(() => {
+    uploadRetryTimer = null;
+    void uploadPushToken();
+  }, delay);
+}
+
 async function uploadPushToken(): Promise<void> {
   const token = getStoredPushToken();
   if (!token) return;
-  // ── باب الجلسة: جهاز بلا جلسة مستخدم (خروج/حذف) لا يُرفع توكنه أبداً ──
-  // يمنع إعادة إحياء صف push_tokens بعد حذفه (دوران توكن FCM، حدث
-  // registration متأخر، تغيّر تفضيلات…) — وإلا بقي جهاز مسجّل خروجه
-  // مستقبلاً إشعارات البث (department NULL يُعامَل كبث في push-notify).
-  // عند الدخول لاحقاً يعيد setPushDepartment الرفع تلقائياً بتغيّر القسم.
+
+  const alertsEnabled = getNotificationPrefs().contentAlerts;
+  const payload = {
+    token,
+    department,
+    is_developer: isDeveloperDevice,
+    platform: 'android',
+    alerts_enabled: alertsEnabled,
+    last_seen_at: new Date().toISOString(),
+  };
+
+  // 0) الطريق المضمون: دالة الحافة push-notify تكتب بمفتاح service role
+  // (يتجاوز RLS)، فتنجح حتى لو كانت سياسات push_tokens تمنع anon تماماً.
   try {
-    if (!localStorage.getItem('univ_user')) return;
-  } catch {
-    return; // تخزين غير قابل للقراءة → لا رفع
-  }
-  try {
-    const { error } = await supabase.from('push_tokens').upsert(
-      {
+    const { data, error } = await supabase.functions.invoke('push-notify', {
+      body: {
+        type: 'register',
+        kind: 'fcm',
         token,
+        platform: 'android',
         department,
         is_developer: isDeveloperDevice,
-        platform: 'android',
-        alerts_enabled: getNotificationPrefs().contentAlerts,
-        last_seen_at: new Date().toISOString(),
+        alerts_enabled: alertsEnabled,
       },
-      { onConflict: 'token' },
-    );
-    if (error) console.warn('[push] token upload failed', error.message);
+    });
+    if (!error && (data as { ok?: boolean } | null)?.ok) {
+      tokenUploaded(token);
+      return;
+    }
+    console.warn('[push] register via edge function failed:', error?.message ?? data);
   } catch (e) {
-    console.warn('[push] token upload failed', e);
+    console.warn('[push] register via edge function threw', e);
   }
+
+  // 1) الطريق الآمن: RPC يتجاوز RLS
+  try {
+    const { error } = await supabase.rpc('register_push_token', {
+      p_token: token,
+      p_department: department,
+      p_is_developer: isDeveloperDevice,
+      p_platform: 'android',
+      p_alerts_enabled: alertsEnabled,
+    });
+    if (!error) {
+      tokenUploaded(token);
+      return;
+    }
+    // PGRST202 = الدالة غير منشورة بعد (الملف لم يُشغَّل) → نكمل للاحتياط
+    if (error.code !== 'PGRST202') {
+      console.warn('[push] register_push_token RPC failed:', error.code, error.message);
+    }
+  } catch (e) {
+    console.warn('[push] register_push_token RPC threw', e);
+  }
+
+  // 2) احتياط: INSERT، وإن كان الصف موجوداً UPDATE
+  try {
+    const ins = await supabase.from('push_tokens').insert(payload);
+    if (!ins.error) {
+      tokenUploaded(token);
+      return;
+    }
+    if (ins.error.code !== '23505') {
+      console.warn('[push] token insert failed:', ins.error.code, ins.error.message);
+    }
+
+    const upd = await supabase
+      .from('push_tokens')
+      .update({ department, is_developer: isDeveloperDevice, alerts_enabled: alertsEnabled, last_seen_at: payload.last_seen_at })
+      .eq('token', token);
+    if (!upd.error) {
+      tokenUploaded(token);
+      return;
+    }
+    console.warn('[push] token update failed:', upd.error.code, upd.error.message);
+  } catch (e) {
+    console.warn('[push] token upload threw', e);
+  }
+
+  // 3) آخر محاولة: upsert (يعمل فقط لو كانت سياسات RLS سليمة)
+  try {
+    const { error } = await supabase.from('push_tokens').upsert(payload, { onConflict: 'token' });
+    if (!error) {
+      tokenUploaded(token);
+      return;
+    }
+    console.warn('[push] token upsert failed:', error.code, error.message);
+  } catch (e) {
+    console.warn('[push] token upsert threw', e);
+  }
+
+  // لم ينجح أي طريق (غالباً بلا شبكة أو RLS) → أعد المحاولة لاحقاً
+  scheduleUploadRetry();
+}
+
+/**
+ * يعيد محاولة تسجيل الجهاز فوراً — يستدعيها App عند:
+ * عودة الشبكة، عودة التطبيق للمقدمة، وتغيّر الإعدادات.
+ */
+export function flushPushRegistration(): void {
+  uploadAttempt = 0;
+  if (uploadRetryTimer) {
+    clearTimeout(uploadRetryTimer);
+    uploadRetryTimer = null;
+  }
+  void uploadPushToken();
 }
 
 /**
@@ -240,19 +334,8 @@ export async function initPush(): Promise<PushRegistration | null> {
   }
 
   if (initialized) {
-    // التوكن يُمسح عند الخروج اليدوي/الحذف (محلياً ومن Firebase): عند أي
-    // دخول لاحق داخل نفس التشغيل نعيد التسجيل — الإضافة تُطلق حدث
-    // 'registration' فيخزّن المُستمع التوكن ويرفعه تلقائياً إلى السيرفر.
-    if (!stored) {
-      try {
-        await PushNotifications.register();
-      } catch (e) {
-        console.warn('[push] re-register failed', e);
-      }
-    }
     await uploadPushToken();
-    const now = getStoredPushToken();
-    return now ? { token: now, platform: 'android' } : null;
+    return stored ? { token: stored, platform: 'android' } : null;
   }
   initialized = true;
 
@@ -281,6 +364,10 @@ export async function initPush(): Promise<PushRegistration | null> {
 
   try {
     await PushNotifications.requestPermissions();
+    try {
+      const perm = await PushNotifications.checkPermissions();
+      console.log('[push] notification permission =', perm.receive);
+    } catch { /* ignore */ }
   } catch (e) {
     console.warn('[push] requestPermissions failed', e);
   }
@@ -290,6 +377,7 @@ export async function initPush(): Promise<PushRegistration | null> {
   try {
     await PushNotifications.addListener('registration', (t) => {
       storePushToken(t.value);
+      console.log('[push] FCM token received:', String(t.value).slice(0, 12) + '...');
       void uploadPushToken();
     });
     await PushNotifications.addListener('pushNotificationReceived', (n) => handleForegroundPush(n));

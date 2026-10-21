@@ -29,9 +29,9 @@ import { useRealtimeNotifications, useRealtimeRegistrations } from '@/hooks/useR
 import { useOfficialRealtime } from '@/hooks/useOfficialRealtime';
 import { useLectureReminders } from '@/hooks/useLectureReminders';
 import { requestNativePermission, onNativeNotificationTap } from '@/lib/nativeNotifications';
-import { bindPushDisplay, initPush, setPushDepartment } from '@/lib/push';
-import { guardDeletedUser, resetDeletedGuard, ACCOUNT_DELETED_EVENT, invalidateDeviceLinks } from '@/lib/deletedGuard';
-import { initWebPush, setWebPushDepartment } from '@/lib/webPush';
+import { bindPushDisplay, initPush, setPushDepartment, flushPushRegistration, unregisterPushToken } from '@/lib/push';
+import { guardDeletedUser, resetDeletedGuard, ACCOUNT_DELETED_EVENT } from '@/lib/deletedGuard';
+import { initWebPush, setWebPushDepartment, flushWebPushRegistration } from '@/lib/webPush';
 import { setAppBadge, clearAppBadge } from '@/lib/appBadge';
 import { useTheme } from '@/hooks/useTheme';
 import { useToday } from '@/hooks/useToday';
@@ -535,20 +535,31 @@ function App() {
     void initPush();
     // PWA/website installs use Web Push instead of FCM (no-op on native).
     void initWebPush();
+    // إعادة محاولة التسجيل في الحالات التي يفشل فيها أول تسجيل:
+    // عودة الشبكة، أو عودة التطبيق للمقدمة (شائع على أندرويد بعد إغلاق
+    // النظام للشبكة أثناء الإقلاع). كلها fire-and-forget ولا ترمي أبداً.
+    const retry = () => {
+      try {
+        flushPushRegistration();
+      } catch { /* ignore */ }
+      try {
+        flushWebPushRegistration();
+      } catch { /* ignore */ }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') retry();
+    };
+    window.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('online', retry);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
   useEffect(() => {
     setPushDepartment(userDepartment, isDeveloper);
     setWebPushDepartment(userDepartment, isDeveloper);
   }, [userDepartment, isDeveloper]);
-  // ── إعادة تسجيل توكن الإشعارات بعد الدخول ──
-  // عند الخروج/الحذف يُمسح التوكن محلياً ويُلغى تسجيله من Firebase؛ أول
-  // دخول لاحق داخل نفس تشغيل التطبيق يستدعي initPush() لتوليد توكن جديد
-  // ورفعه إلى السيرفر — وإلا توقفت الإشعارات حتى إعادة تشغيل التطبيق.
-  const activeUserId = user?.id ?? null;
-  useEffect(() => {
-    if (!activeUserId) return;
-    void initPush();
-  }, [activeUserId]);
 
   // Scheduled native reminders: 60min + 15min before lectures, evening summary 19:00
   useLectureReminders(userDepartment, user?.name);
@@ -597,14 +608,11 @@ function App() {
   }, [user?.id]);
 
   const handleLogout = () => {
-    // ── الحالة الثانية (الخروج اليدوي فقط): تنظيف FCM Token فوراً ──
+    // ── الحالة الثانية (الخروج اليدوي فقط): تنظيف FCM Token من السيرفر ──
     // قبل مسح الجلسة المحلية: حذف/تصفير توكن هذا الجهاز من جدول push_tokens
-    // (مع مسار احتياطي alerts_enabled=false إذا رفضت السياسات الـ DELETE)،
-    // وإلغاء اشتراك Web Push من السيرفر، ومسح التوكن محلياً وإلغاء تسجيله
-    // من Firebase — فيكفّ الجهاز تماماً عن استقبال الإشعارات.
-    // fire-and-forget — لا يمنع الخروج أبداً. (لا يمس أي جزء آخر من نظام
-    // الإشعارات — باب الجلسة في uploadPushToken يمنع أي رفع لاحق.)
-    try { invalidateDeviceLinks(); } catch { /* ignore */ }
+    // ليتوقف عن استقبال الإشعارات. fire-and-forget — لا يمنع الخروج أبداً.
+    // (لا يمس أي جزء آخر من نظام الإشعارات.)
+    try { unregisterPushToken(); } catch { /* ignore */ }
     try { resetDeletedGuard(); } catch { /* ignore */ }
     localStorage.removeItem('univ_user');
     if (user) clearProgressKey(user.id);

@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Pencil, Trash2, Loader2, Bell, Clock, AlertTriangle, Info, Megaphone, Cpu, Zap, Users, CloudUpload } from 'lucide-react';
-import { DEPARTMENT_OPTIONS, displayDepartment, DAYS, type Notification, type Department, type Lecture } from '@/lib/supabase';
-import { fetchNotifications, addNotification, updateNotification, deleteNotification, fetchLectures } from '@/lib/api';
-import { parsePostponement, lectureFingerprint } from '@/lib/postponementSkip';
+import { DEPARTMENT_OPTIONS, displayDepartment, type Notification, type Department } from '@/lib/supabase';
+import { fetchNotifications, addNotification, updateNotification, deleteNotification } from '@/lib/api';
 import { fetchWithCache, isPendingId, updateQueuedOp, dequeue } from '@/lib/offlineStore';
 import { runOrQueue } from '@/lib/offlineSync';
 import { useToast } from '@/components/ToastProvider';
@@ -54,12 +53,6 @@ const TYPE_CONFIG = {
   },
 } as const;
 
-/** استخراج 'HH:MM' من أي صيغة وقت مخزنة ('08:00:00' | '8:00') — '' إن لم تكن صالحة. */
-function hhmm(t: string | null | undefined): string {
-  const m = String(t ?? '').match(/(\d{1,2}):(\d{2})/);
-  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : '';
-}
-
 export default function NotificationsView({ isDeveloper, department }: Props) {
   const { showToast } = useToast();
   const [notifications, setNotifications] = useState<(Notification & { __pending?: boolean })[]>([]);
@@ -72,21 +65,6 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
   const [message, setMessage] = useState('');
   const [type, setType] = useState<'postponement' | 'general' | 'reminder'>('general');
   const [targetDept, setTargetDept] = useState<Department | 'all'>('all');
-
-  // ── مساعد التأجيل: قائمة المواد المسجلة + حصصها (لتخطي مضمون 100%) ──
-  const [subjects, setSubjects] = useState<string[]>([]);
-  const [sessions, setSessions] = useState<{ day: string; time: string }[]>([]);
-  const [postSubject, setPostSubject] = useState('');
-  const [postSession, setPostSession] = useState('');
-  const [manualDay, setManualDay] = useState('');
-  const [manualTime, setManualTime] = useState('');
-  // الحصة النشطة: اختيار القائمة، أو تحديد يدوي عندما لا تتوفر حصص محمّلة.
-  const activeSession =
-    sessions.length > 0
-      ? postSession
-      : postSubject && manualDay && manualTime
-        ? `${manualDay}|${manualTime}`
-        : '';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -103,91 +81,17 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
     load();
   }, [load]);
 
-  // تحميل المواد المسجلة (حسب القسم الموجَّه إليه) لقائمة التأجيل المنسدلة.
-  useEffect(() => {
-    if (!showForm || type !== 'postponement') return;
-    let cancelled = false;
-    (async () => {
-      const dept = targetDept === 'all' ? undefined : targetDept;
-      const res = await fetchWithCache<Lecture>('lectures', dept, () => fetchLectures(dept));
-      if (cancelled) return;
-      const uniq = Array.from(
-        new Set(
-          res.rows
-            .filter((l) => !l.is_holiday && l.subject && l.subject.trim())
-            .map((l) => l.subject.trim()),
-        ),
-      ).sort((a, b) => a.localeCompare(b, 'ar'));
-      setSubjects(uniq);
-      // إذا اختفى القسم المختار من القائم الجديدة → عدّل إلى "تأجيل حر".
-      setPostSubject((cur) => (cur && !uniq.includes(cur) ? '' : cur));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [showForm, type, targetDept]);
-
-  // حصص المادة المختارة (اليوم + وقت البدء) — تأتي من نفس الجدول الذي يبني
-  // منه الطلاب منبهاتهم، لضمان مطابقة البصمة (مادة|يوم|وقت) حرفيًا.
-  useEffect(() => {
-    setPostSession('');
-    if (!showForm || type !== 'postponement' || !postSubject) {
-      setSessions([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      const dept = targetDept === 'all' ? undefined : targetDept;
-      const res = await fetchWithCache<Lecture>('lectures', dept, () => fetchLectures(dept));
-      if (cancelled) return;
-      const seen = new Set<string>();
-      const dedup = res.rows
-        .filter((l) => !l.is_holiday && l.subject && l.subject.trim() === postSubject && l.day)
-        .map((l) => ({ day: l.day, time: hhmm(l.start_time) }))
-        .filter((x) => {
-          if (!x.time) return false;
-          const k = `${x.day}|${x.time}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
-      setSessions(dedup);
-      // حصة واحدة فقط في الأسبوع → تُختار تلقائيًا لتقليل خطأ الطريقة.
-      if (dedup.length === 1) setPostSession(`${dedup[0].day}|${dedup[0].time}`);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [showForm, type, targetDept, postSubject]);
-
-  // عند اكتمال (مادة + حصة): يولّد العنوان والرسالة بالقالب المضمون للمطابقة.
-  useEffect(() => {
-    if (type !== 'postponement' || !postSubject || !activeSession) return;
-    const [day, time] = activeSession.split('|');
-    setTitle(`تأجيل محاضرة ${postSubject}`);
-    setMessage(`تم تأجيل محاضرة ${postSubject} يوم ${day} الساعة ${time}`);
-  }, [type, postSubject, activeSession]);
-
   const resetForm = () => {
     setTitle('');
     setMessage('');
     setType('general');
     setTargetDept('all');
-    setPostSubject('');
-    setPostSession('');
-    setManualDay('');
-    setManualTime('');
     setEditingId(null);
     setShowForm(false);
   };
 
   const startEdit = (notification: Notification) => {
     setEditingId(notification.id);
-    // التعديل يبدأ بوضع "نص حر" — التحديد السابق لا يُطبَّق على إشعار آخر.
-    setPostSubject('');
-    setPostSession('');
-    setManualDay('');
-    setManualTime('');
     setTitle(notification.title);
     setMessage(notification.message);
     setType(notification.notification_type);
@@ -199,28 +103,6 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !message.trim()) return;
-    // استثناء التأجيل: عند اختيار (مادة + حصة) يجب أن يطابق النص المُرسل
-    // البصمة المتوقعة تمامًا — وإلا لكان الإشعار بلا تخطي فعّال (نمنعه هنا).
-    if (type === 'postponement' && postSubject) {
-      if (!activeSession) {
-        showToast('أكمل تحديد الحصة', 'اختر اليوم والوقت لمطابقة منبّه المحاضرة، أو اضغط «تأجيل حر» لإلغاء التحديد.', 'error');
-        return;
-      }
-      const [expDay, expTime] = activeSession.split('|');
-      const parsed = parsePostponement(title.trim(), message.trim());
-      if (
-        !parsed ||
-        lectureFingerprint(parsed.subject, parsed.day, parsed.startTime) !==
-          lectureFingerprint(postSubject, expDay, expTime)
-      ) {
-        showToast(
-          'النص لا يطابق الحصة المختارة',
-          `يجب أن تتضمن الرسالة: «${postSubject}» + «${expDay}» + «${expTime}»، أو امسح التحديد لتأجيل حر.`,
-          'error',
-        );
-        return;
-      }
-    }
     setSubmitting(true);
     const fields = {
       title: title.trim(),
@@ -400,109 +282,6 @@ export default function NotificationsView({ isDeveloper, department }: Props) {
               ))}
             </div>
           </div>
-          {type === 'postponement' && (
-            <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-xl p-4 space-y-3">
-              <p className="text-sm font-bold text-red-700 dark:text-red-300 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
-                تحديد المحاضرة المؤجلة — يتخطى منبّه هذه الحصة فقط
-              </p>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">المواد المسجلة</label>
-                <div className="flex gap-2">
-                  <select
-                    value={postSubject}
-                    onChange={(e) => {
-                      setPostSubject(e.target.value);
-                      setPostSession('');
-                      setManualDay('');
-                      setManualTime('');
-                    }}
-                    className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all"
-                  >
-                    <option value="">— اختر مادة (للتأجيل الحر اتركه فارغًا) —</option>
-                    {subjects.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  {postSubject && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPostSubject('');
-                        setPostSession('');
-                        setManualDay('');
-                        setManualTime('');
-                      }}
-                      className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium transition-all"
-                    >
-                      تأجيل حر
-                    </button>
-                  )}
-                </div>
-                {subjects.length === 0 && (
-                  <p className="text-xs text-red-500 dark:text-red-400 mt-1.5">
-                    لم تُحمّل قائمة المواد (قد يكون دون اتصال) — اكتب التأجيل يدويًا في العنوان والرسالة.
-                  </p>
-                )}
-              </div>
-
-              {postSubject && sessions.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">الحصة في الجدول</label>
-                  <select
-                    value={postSession}
-                    onChange={(e) => setPostSession(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all"
-                  >
-                    <option value="">— اختر اليوم والوقت —</option>
-                    {sessions.map((x) => (
-                      <option key={`${x.day}|${x.time}`} value={`${x.day}|${x.time}`}>
-                        {x.day} — الساعة {x.time}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {postSubject && sessions.length === 0 && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">اليوم (يدوي)</label>
-                    <select
-                      value={manualDay}
-                      onChange={(e) => setManualDay(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all"
-                    >
-                      <option value="">— اختر يومًا —</option>
-                      {DAYS.map((d) => (
-                        <option key={d} value={d}>
-                          {d}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">وقت البدء (يدوي)</label>
-                    <input
-                      type="time"
-                      value={manualTime}
-                      onChange={(e) => setManualTime(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:border-transparent transition-all"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <p className="text-xs text-red-600 dark:text-red-400 leading-relaxed">
-                ✅ عند اختيار مادة + حصة: يُشطب العنوان والرسالة تلقائيًا بالقالب المضمون («تم تأجيل محاضرة … يوم … الساعة …») — لا تغيّر اليوم/الوقت حتى تتم المطابقة عند الطلاب.
-                <br />
-                🆓 التأجيل الحر (مشروع، لجنة، امتحان…): اترك الاختيار فارغًا واكتب نصك بنفسك — <b>لا يُخطي أي منبه</b>.
-              </p>
-            </div>
-          )}
           <div className="flex gap-3">
             <button
               type="submit"

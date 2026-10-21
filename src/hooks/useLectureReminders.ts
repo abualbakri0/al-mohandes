@@ -86,18 +86,6 @@ export function useLectureReminders(department: Department | null, userName?: st
       if (rescheduling) return;
       rescheduling = true;
       try {
-      // ── لا جلسة (تسجيل خروج يدوي أو حذف حساب) → لا تذكيرات محلية ──
-      // userName يصبح فارغاً فور خروج المستخدم: نُلغي كل المهام المجدولة
-      // على الجهاز ولا نجدول أي شيء جديد — لا يستمر أي إشعار محلي بعد
-      // الخروج. المطوّر يمرّ هنا بشكل طبيعي باسمه (قسمه null مقصود —
-      // جدوله يبقى كما هو).
-      if (!nameRef.current) {
-        if (scheduledIds.current.length > 0) {
-          await cancelNativeReminders(scheduledIds.current);
-          if (myGen === generation.current && !cancelled) scheduledIds.current = [];
-        }
-        return;
-      }
       const prefs = getNotificationPrefs();
       // Clear old schedules first
       if (scheduledIds.current.length > 0) {

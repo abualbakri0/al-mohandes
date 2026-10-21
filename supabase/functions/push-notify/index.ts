@@ -222,12 +222,33 @@ function isMeaningfulUpdate(table: string, oldRow: PushRecord, newRow: PushRecor
 }
 
 function isUnregistered(text: string): boolean {
-  return text.includes('UNREGISTERED') || text.includes('registration-token-not-registered');
+  // UNREGISTERED / NOT_FOUND = التطبيق حُذف أو التوكن أُبطل.
+  // INVALID_ARGUMENT "not a valid FCM registration token" = توكن تالف/من مشروع
+  // آخر — لا يمكن أن ينجح أبداً، لذا يُعدّ ميتاً أيضاً حتى لا يبقى للأبد.
+  return (
+    text.includes('UNREGISTERED') ||
+    text.includes('registration-token-not-registered') ||
+    text.includes('NOT_FOUND') ||
+    text.includes('not a valid FCM registration token') ||
+    text.includes('SENDER_ID_MISMATCH')
+  );
 }
 
 // ---------- Web Push (RFC 8291 / RFC 8188 — aes128gcm) ----------
-const WEBPUSH_VAPID_PUBLIC_KEY = 'BAgNlZmy2X85JwCi85A1RxAU7i2Th9uGWCm0oHr-4OeOHDFyWXDVrDU6X7yrKc5ds-H0xzmgovSddjVYswjsqLg';
+//
+// لماذا كانت إشعارات الويب لا تصل (أسباب مؤكدة):
+//  1) ترخيص VAPID كان يُرسل كـ "Authorization: Bearer <jwt>" وهذا خطأ:
+//     خدمات Push تتطلب  Authorization: vapid t=<jwt>, k=<publicKey>
+//     ⇒ كل محاولة كانت ترجع 401/403.
+//  2) الحمولة كانت تُشفّر ببنية draft-04 القديمة (ترويسات Encryption /
+//     Crypto-Key) بينما Content-Encoding معلن aes128gcm ⇒ يجب أن يحمل
+//     الجسم نفسه الترويسة: salt(16) || rs(4) || idlen(1) || serverPub(65).
+//  3) الاشتراكات كانت تُحذف عند 403 رغم أنها سليمة (403 = مفتاح VAPID خطأ).
+const WEBPUSH_VAPID_PUBLIC_KEY =
+  'BAVbmfT7ueuA7jIEhBCuBLrmqHARowQiSTtM6Y9b6DHOi0gts71gpaGpu7udDKhNa1nMJQwjT9BqdzPeAnyKsN4';
 const WEBPUSH_SUBJECT = 'mailto:webpush@mohanndes.app';
+const WEBPUSH_RECORD_SIZE = 4096;
+const textEncoder = new TextEncoder();
 
 function wpB64urlEnc(buf: Uint8Array): string {
   let bin = '';
@@ -237,70 +258,142 @@ function wpB64urlEnc(buf: Uint8Array): string {
 }
 
 function wpB64urlDec(str: string): Uint8Array {
-  const padding = '='.repeat((4 - (str.length % 4)) % 4);
-  const base64 = (str + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const raw = atob(base64);
+  const normalized = String(str).trim().replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
+  const raw = atob(normalized + padding);
   const out = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
 }
 
-async function hkdfExpand(ikmKey: CryptoKey, salt: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
-  const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, ikmKey, length);
+function wpConcat(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+/** HKDF-SHA256 (RFC 5869) عبر WebCrypto. */
+async function wpHkdf(ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey('raw', ikm, { name: 'HKDF' }, false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, key, length * 8);
   return new Uint8Array(bits);
 }
 
-async function buildVapidJwt(audience: string, vapidPrivateKeyPkcs8B64: string): Promise<string> {
+/**
+ * يحمّل مفتاح VAPID الخاص بأي صيغة محتملة في الأسرار:
+ *  - PEM كامل -----BEGIN PRIVATE KEY-----
+ *  - PKCS8 base64 (ناتج scripts/gen-vapid-keys.mjs → VAPID_PRIVATE_KEY_PKCS8_B64)
+ *  - القيمة الخام d بصيغة base64url (JWK → VAPID_PRIVATE_KEY_JWK_D)
+ */
+async function loadVapidPrivateKey(rawSecret: string): Promise<CryptoKey> {
+  const cleaned = String(rawSecret).trim().replace(/^["']|["']$/g, '').replace(/\\n/g, '\n');
+
+  if (cleaned.includes('BEGIN PRIVATE KEY')) {
+    return crypto.subtle.importKey('pkcs8', pemToDer(cleaned), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  }
+
+  const compact = cleaned.replace(/\s+/g, '');
+  if (compact.length >= 100) {
+    // PKCS8 مُرمّز base64 قياسي (قد يحتوي + و / و =)
+    const der = wpB64urlDec(compact);
+    return crypto.subtle.importKey('pkcs8', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  }
+
+  // مفتاح خام (d فقط) — نعيد بناء JWK من المفتاح العام المعلن
+  const pub = wpB64urlDec(WEBPUSH_VAPID_PUBLIC_KEY);
+  if (pub.length !== 65) throw new Error('WEBPUSH_VAPID_PUBLIC_KEY غير صالح');
+  const jwk: JsonWebKey = {
+    kty: 'EC',
+    crv: 'P-256',
+    d: compact,
+    x: wpB64urlEnc(pub.subarray(1, 33)),
+    y: wpB64urlEnc(pub.subarray(33, 65)),
+    ext: true,
+  };
+  return crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+}
+
+async function buildVapidJwt(audience: string, key: CryptoKey): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'ES256', typ: 'JWT' };
   const payload = { aud: audience, exp: now + 43200, sub: WEBPUSH_SUBJECT };
   const unsigned = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`;
-  const padded = vapidPrivateKeyPkcs8B64.match(/.{1,64}/g)!.join('\n');
-  const pem = `-----BEGIN PRIVATE KEY-----\n${padded}\n-----END PRIVATE KEY-----`;
-  const der = pemToDer(pem);
-  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
-  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(unsigned));
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, textEncoder.encode(unsigned));
   return `${unsigned}.${b64url(new Uint8Array(signature))}`;
 }
 
-async function encryptWebPushPayload(
-  clientKeyB64: string,
-  authB64: string,
-  plaintext: string,
-): Promise<{ encrypted: Uint8Array; salt: Uint8Array; serverPublicKeyRaw: Uint8Array }> {
+/**
+ * فحص ذاتي: هل المفتاح الخاص في الأسرار يطابق فعلاً المفتاح العام المعلن؟
+ * خدمات Push ترفض التوقيع (401/403 invalid JWT) عندما لا يتطابق الاثنان —
+ * وهي أشهر أسباب «الاشتراك موجود لكن لا يصل شيء» في الويب.
+ */
+async function vapidKeyMatchesPublic(privateKey: CryptoKey): Promise<boolean> {
+  try {
+    const pub = wpB64urlDec(WEBPUSH_VAPID_PUBLIC_KEY);
+    if (pub.length !== 65) return false;
+    const publicKey = await crypto.subtle.importKey(
+      'raw',
+      pub,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify'],
+    );
+    const probe = textEncoder.encode('vapid-self-test');
+    const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, probe);
+    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey, sig, probe);
+  } catch (e) {
+    console.error('[push-notify] vapid self-test failed:', String(e));
+    return false;
+  }
+}
+/** يشفّر حمولة Web Push حسب RFC 8291 (aes128gcm) ويعيد الجسم الجاهز للإرسال. */
+async function encryptWebPushPayload(clientKeyB64: string, authB64: string, plaintext: string): Promise<Uint8Array> {
   const clientKeyRaw = wpB64urlDec(clientKeyB64);
-  const auth = wpB64urlDec(authB64);
-  const clientPublicKey = await crypto.subtle.importKey('raw', clientKeyRaw, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
-  const serverKeyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
-  const serverPublicKeyRaw = new Uint8Array(await crypto.subtle.exportKey('raw', serverKeyPair.publicKey));
-  const sharedSecretKey = await crypto.subtle.deriveKey({ name: 'ECDH', public: clientPublicKey }, serverKeyPair.privateKey, { name: 'AES-GCM', length: 128 }, true, ['encrypt', 'decrypt']);
-  const sharedSecret = new Uint8Array(await crypto.subtle.exportKey('raw', sharedSecretKey));
-  const ikm = new Uint8Array(sharedSecret.length + auth.length);
-  ikm.set(sharedSecret);
-  ikm.set(auth, sharedSecret.length);
+  if (clientKeyRaw.length !== 65) throw new Error(`p256dh غير صالح (${clientKeyRaw.length} بايت)`);
+  const authSecret = wpB64urlDec(authB64);
+  if (authSecret.length !== 16) throw new Error(`auth غير صالح (${authSecret.length} بايت)`);
+
+  const clientPublicKey = await crypto.subtle.importKey(
+    'raw',
+    clientKeyRaw,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    [],
+  );
+  const serverKeys = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const asPublic = new Uint8Array(await crypto.subtle.exportKey('raw', serverKeys.publicKey));
+  const ecdhSecret = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: 'ECDH', public: clientPublicKey }, serverKeys.privateKey, 256),
+  );
+
+  // IKM = HKDF(salt=auth_secret, ikm=ecdh, info="WebPush: info\0" || ua_public || as_public)
+  const keyInfo = wpConcat(textEncoder.encode('WebPush: info\u0000'), clientKeyRaw, asPublic);
+  const ikm = await wpHkdf(ecdhSecret, authSecret, keyInfo, 32);
+
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const ikmKey = await crypto.subtle.importKey('raw', ikm, { name: 'HKDF' }, false, []);
-  const context = new Uint8Array(clientKeyRaw.length + serverPublicKeyRaw.length);
-  context.set(clientKeyRaw);
-  context.set(serverPublicKeyRaw, clientKeyRaw.length);
-  const infoPrefix = new TextEncoder().encode('Content-Encoding: aes128gcm');
-  const cekInfo = new Uint8Array(infoPrefix.length + context.length + 2);
-  cekInfo.set(infoPrefix);
-  cekInfo.set(context, infoPrefix.length);
-  cekInfo.set([0x00, 0x10], infoPrefix.length + context.length);
-  const cekBits = await hkdfExpand(ikmKey, salt, cekInfo, 128);
-  const cekKey = await crypto.subtle.importKey('raw', cekBits, { name: 'AES-GCM' }, false, ['encrypt']);
-  const nonceInfo = new Uint8Array(infoPrefix.length + context.length + 2);
-  nonceInfo.set(infoPrefix);
-  nonceInfo.set(context, infoPrefix.length);
-  nonceInfo.set([0x00, 0x0C], infoPrefix.length + context.length);
-  const nonce = await hkdfExpand(ikmKey, salt, nonceInfo, 96);
-  const data = new TextEncoder().encode(plaintext);
-  const pt = new Uint8Array(data.length + 1);
-  pt.set(data);
-  pt[data.length] = 0x02;
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: new Uint8Array(0) }, cekKey, pt);
-  return { encrypted: new Uint8Array(encrypted), salt, serverPublicKeyRaw };
+  const cek = await wpHkdf(ikm, salt, textEncoder.encode('Content-Encoding: aes128gcm\u0000'), 16);
+  const nonce = await wpHkdf(ikm, salt, textEncoder.encode('Content-Encoding: nonce\u0000'), 12);
+
+  const cekKey = await crypto.subtle.importKey('raw', cek, { name: 'AES-GCM' }, false, ['encrypt']);
+  const plain = textEncoder.encode(plaintext);
+  // 0x02 = علامة آخر سجل (padding delimiter)
+  const padded = wpConcat(plain, new Uint8Array([0x02]));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, tagLength: 128 }, cekKey, padded),
+  );
+
+  const header = new Uint8Array(16 + 4 + 1 + 65);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(16, WEBPUSH_RECORD_SIZE, false);
+  header[20] = 65; // طول مفتاح الخادم
+  header.set(asPublic, 21);
+
+  return wpConcat(header, ciphertext);
 }
 
 async function sendWebPush(
@@ -308,48 +401,86 @@ async function sendWebPush(
   p256dh: string,
   auth: string,
   payload: string,
-  vapidPrivateKeyPkcs8B64: string,
-): Promise<{ ok: boolean; status: number; gone: boolean }> {
+  vapidKey: CryptoKey,
+  keyVerified = false,
+): Promise<{ ok: boolean; status: number; gone: boolean; error?: string }> {
   try {
-    const { encrypted, salt, serverPublicKeyRaw } = await encryptWebPushPayload(p256dh, auth, payload);
-    const aud = new URL(endpoint).origin;
-    const jwt = await buildVapidJwt(aud, vapidPrivateKeyPkcs8B64);
+    let body: Uint8Array;
+    let jwt: string;
+    try {
+      body = await encryptWebPushPayload(p256dh, auth, payload);
+      const audience = new URL(endpoint).origin;
+      jwt = await buildVapidJwt(audience, vapidKey);
+    } catch (e) {
+      // خطأ محلي قبل أي إرسال (base64 تالف في p256dh/auth، أو endpoint غير
+      // صالح). إعادة المحاولة لن تنجح أبداً → الصف ميت ويُحذف.
+      console.error(`[webpush] prepare error (dead row): ${String(e)}`);
+      return { ok: false, status: 0, gone: true, error: String(e).slice(0, 160) };
+    }
     const res = await fetch(endpoint, {
       method: 'POST',
-      body: encrypted,
+      body,
       headers: {
-        'Encryption': `salt=${wpB64urlEnc(salt)}`,
-        'Crypto-Key': `p256dh=${wpB64urlEnc(serverPublicKeyRaw)}`,
+        Authorization: `vapid t=${jwt}, k=${WEBPUSH_VAPID_PUBLIC_KEY}`,
         'Content-Encoding': 'aes128gcm',
-        'Authorization': `Bearer ${jwt}`,
         'Content-Type': 'application/octet-stream',
         TTL: '86400',
-        Urgency: 'normal',
+        Urgency: 'high',
       },
     });
-    return { ok: res.status === 201, status: res.status, gone: res.status === 410 || res.status === 404 || res.status === 403 };
+    const ok = res.status === 200 || res.status === 201 || res.status === 202;
+    if (!ok) {
+      const text = await res.text().catch(() => '');
+      console.error(`[webpush] ${res.status} ${text.slice(0, 200)}`);
+      // 404/410 = الاشتراك لم يعد موجوداً.
+      // 401/403 = توقيع VAPID مرفوض؛ إن كان المفتاح مُتحقَّقاً فهذا يعني أن
+      // الاشتراك أُنشئ بمفتاح عام آخر (تدوير مفاتيح) → صف ميت يجب حذفه
+      // ليعيد المتصفح التسجيل بالمفتاح الحالي.
+      const staleKey = keyVerified && (res.status === 401 || res.status === 403);
+      return {
+        ok: false,
+        status: res.status,
+        gone: res.status === 404 || res.status === 410 || staleKey,
+        error: `${res.status} ${text.slice(0, 160)}`,
+      };
+    }
+    return { ok: true, status: res.status, gone: false };
   } catch (e) {
     console.error(`[webpush] send error: ${String(e)}`);
-    return { ok: false, status: 0, gone: false };
+    return { ok: false, status: 0, gone: false, error: String(e).slice(0, 160) };
   }
 }
 
 // ---------- HTTP handler ----------
 
+// التطبيق (متصفح/PWA) يستدعي الدالة للتسجيل، فالبوابة تحتاج CORS صريحاً
+// للطلبات المسبقة (preflight) ولقراءة الرد.
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type, x-webhook-secret',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Max-Age': '86400',
+};
+
+function jsonRes(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+  });
+}
+
 serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+    return new Response('Method not allowed', { status: 405, headers: CORS_HEADERS });
   }
 
-  // Optional shared-secret check (Supabase DB Webhooks can send it as a header).
-  const webhookSecret = Deno.env.get('WEBHOOK_SECRET');
-  if (webhookSecret) {
-    const raw = req.headers.get('authorization') ?? req.headers.get('x-webhook-secret') ?? '';
-    const bearer = raw.startsWith('Bearer ') ? raw.slice(7) : raw;
-    if (bearer !== webhookSecret) {
-      return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
-    }
-  }
+  // ملاحظة: فحص السر المشترك (WEBHOOK_SECRET) تم نقله إلى ما بعد معالجة
+  // طلبات تسجيل الجهاز (register/unregister) — لأن تلك الطلبات تأتي من
+  // التطبيق بمفتاح anon ولا تحمل السر. انظر أدناه.
 
   let body: {
     type?: string;
@@ -359,6 +490,15 @@ serve(async (req: Request) => {
     title?: string;
     body?: string;
     department?: string | null;
+    // ---- تسجيل الجهاز من العميل (register / unregister) ----
+    kind?: 'fcm' | 'web';
+    token?: string;
+    endpoint?: string;
+    p256dh?: string;
+    auth?: string;
+    platform?: string;
+    is_developer?: boolean;
+    alerts_enabled?: boolean;
   };
   try {
     body = await req.json();
@@ -368,6 +508,107 @@ serve(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+
+  // ---------- تسجيل/إلغاء تسجيل من التطبيق ----------
+  // لماذا من هنا وليس من العميل مباشرة؟ جداول push_tokens /
+  // web_push_subscriptions محمية بـ RLS، والتطبيق يكتب بمفتاح anon بلا JWT
+  // ⇒ كل insert/upsert كان يرجع 42501 (new row violates row-level security).
+  // هنا نكتب بمفتاح service role (يتجاوز RLS) فينجح التسجيل بلا أي تعديل على
+  // سياسات القاعدة. هذا المسار لا يتطلب السر المشترك لأنه يأتي من المستخدم.
+  if (body.type === 'register' || body.type === 'unregister') {
+    if (!supabaseUrl || !serviceKey) {
+      return jsonRes({ error: 'missing service credentials' }, 500);
+    }
+    const kind = body.kind === 'web' ? 'web' : 'fcm';
+    const supabase = createClient(supabaseUrl, serviceKey);
+    const isUnregister = body.type === 'unregister';
+
+    if (kind === 'fcm') {
+      const token = (body.token ?? '').trim();
+      // توكنات FCM طويلة (عادة 150+ حرف) — نرفض القيم العبثية مبكراً.
+      if (token.length < 20 || token.length > 4096) {
+        return jsonRes({ error: 'invalid token' }, 400);
+      }
+      if (isUnregister) {
+        const { error } = await supabase.from('push_tokens').delete().eq('token', token);
+        if (error) {
+          return jsonRes({ error: error.message }, 500);
+        }
+        return jsonRes({ ok: true, removed: true });
+      }
+      const { error } = await supabase.from('push_tokens').upsert(
+        {
+          token,
+          platform: body.platform ?? 'android',
+          department: body.department ?? null,
+          is_developer: body.is_developer === true,
+          alerts_enabled: body.alerts_enabled !== false,
+          last_seen_at: new Date().toISOString(),
+        },
+        { onConflict: 'token' },
+      );
+      if (error) {
+        console.error('[register] fcm upsert failed:', error.code, error.message);
+        return jsonRes({ error: error.message }, 500);
+      }
+      return jsonRes({ ok: true, kind: 'fcm' });
+    }
+
+    const endpoint = (body.endpoint ?? '').trim();
+    const p256dh = (body.p256dh ?? '').trim();
+    const authKey = (body.auth ?? '').trim();
+    if (!endpoint.startsWith('https://') || endpoint.length > 2048) {
+      return jsonRes({ error: 'invalid endpoint' }, 400);
+    }
+    if (isUnregister) {
+      const { error } = await supabase
+        .from('web_push_subscriptions')
+        .delete()
+        .eq('endpoint', endpoint);
+      if (error) {
+        return jsonRes({ error: error.message }, 500);
+      }
+      return jsonRes({ ok: true, removed: true });
+    }
+    if (p256dh.length < 20 || p256dh.length > 512 || authKey.length < 8 || authKey.length > 256) {
+      return jsonRes({ error: 'invalid subscription keys' }, 400);
+    }
+    const { error } = await supabase.from('web_push_subscriptions').upsert(
+      {
+        endpoint,
+        p256dh,
+        auth: authKey,
+        department: body.department ?? null,
+        is_developer: body.is_developer === true,
+        alerts_enabled: body.alerts_enabled !== false,
+        last_seen_at: new Date().toISOString(),
+      },
+      { onConflict: 'endpoint' },
+    );
+    if (error) {
+      console.error('[register] web upsert failed:', error.code, error.message);
+      return jsonRes({ error: error.message }, 500);
+    }
+    return jsonRes({ ok: true, kind: 'web' });
+  }
+
+  // ---------- فحص السر المشترك (لطلبات المشغّل/الويب هوك) ----------
+  // مشغّل قاعدة البيانات يرسل دائماً:
+  //   Authorization: Bearer <anon key>   (لعبور بوابة الدوال)
+  //   x-webhook-secret: <WEBHOOK_SECRET>
+  // لذلك يجب فحص x-webhook-secret أولاً، وإلا صار كل استدعاء من المشغّل 401
+  // بسبب مقارنة مفتاح الـ anon بالسر المشترك.
+  const webhookSecret = Deno.env.get('WEBHOOK_SECRET');
+  if (webhookSecret) {
+    const headerSecret = req.headers.get('x-webhook-secret');
+    const auth = req.headers.get('authorization') ?? '';
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
+    const provided = headerSecret ?? bearer;
+    if (provided !== webhookSecret) {
+      return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+    }
+  }
+
   const serviceAccountRaw = Deno.env.get('FIREBASE_SERVICE_ACCOUNT');
   if (!supabaseUrl || !serviceKey || !serviceAccountRaw) {
     return new Response(
@@ -397,9 +638,25 @@ serve(async (req: Request) => {
   // Defensive: some secret stores turn real newlines into literal \n.
   serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
 
-  const vapidPrivateKeyPkcs8B64 = Deno.env.get('WEBPUSH_VAPID_PRIVATE_KEY');
-  if (!vapidPrivateKeyPkcs8B64) {
+  // ---------- مفتاح VAPID الخاص بـ Web Push ----------
+  // يقبل أسماء متعددة للسر لأن كل لوحة/سكربت يسمّيه بشكل مختلف.
+  const vapidRaw =
+    Deno.env.get('WEBPUSH_VAPID_PRIVATE_KEY') ??
+    Deno.env.get('VAPID_PRIVATE_KEY_PKCS8_B64') ??
+    Deno.env.get('VAPID_PRIVATE_KEY_JWK_D') ??
+    Deno.env.get('VAPID_PRIVATE_KEY') ??
+    '';
+  let vapidKey: CryptoKey | null = null;
+  let vapidKeyError = '';
+  if (!vapidRaw) {
     console.warn('[push-notify] WEBPUSH_VAPID_PRIVATE_KEY not set — Web Push will be skipped');
+  } else {
+    try {
+      vapidKey = await loadVapidPrivateKey(vapidRaw);
+    } catch (e) {
+      vapidKeyError = String(e);
+      console.error('[push-notify] مفتاح VAPID غير صالح:', vapidKeyError);
+    }
   }
 
   // Content source 1: Database Webhook (INSERT or UPDATE event)
@@ -449,7 +706,7 @@ serve(async (req: Request) => {
   // Also query Web Push subscriptions (PWA / browser installs).
   // Same department / alerts filtering as FCM tokens.
   let webSubs: { endpoint: string; p256dh: string; auth: string; department: string | null; alerts_enabled: boolean; is_developer: boolean }[] = [];
-  if (vapidPrivateKeyPkcs8B64) {
+  if (vapidKey) {
     let wquery = supabase
       .from('web_push_subscriptions')
       .select('endpoint, p256dh, auth, department, alerts_enabled, is_developer')
@@ -503,6 +760,8 @@ serve(async (req: Request) => {
   let sent = 0;
   let failed = 0;
   const deadTokens: string[] = [];
+  const fcmStatuses: number[] = [];
+  const fcmErrors: string[] = [];
 
   // Send to all devices CONCURRENTLY — a sequential loop would make the
   // dispatch time grow linearly with the number of devices (0.3s each).
@@ -520,14 +779,26 @@ serve(async (req: Request) => {
                 notification: { title: content.title, body: content.body },
                 data,
                 android: {
-                  priority: 'high',
+                  // FCM v1 (HTTP v1) expects the enum NAME "HIGH" (uppercase),
+                  // NOT the legacy lowercase "high". Lowercase is silently
+                  // ignored -> NORMAL priority -> delivery is deferred while
+                  // the device is idle/Doze (looks like "never arrives" when
+                  // the app is closed).
+                  priority: 'HIGH',
                   notification: {
+                    // Explicitly pass title/body at the Android level: some
+                    // FCM v1 clients do NOT fall back to the top-level
+                    // `notification` title/body when `android.notification`
+                    // is present, which would render an empty tray entry.
+                    title: content.title,
+                    body: content.body,
                     channel_id: channelId,
                     // Tints the small icon + app name so the tray matches app brand.
                     color: notifyColor,
                     default_vibrate_timings: true,
                     default_sound: true,
-                    visibility: 1,
+                    // FCM v1 visibility enum: PUBLIC = show fully on lock screen.
+                    visibility: 'PUBLIC',
                   },
                 },
               },
@@ -535,14 +806,14 @@ serve(async (req: Request) => {
           },
         );
         if (res.ok) {
-          return { ok: true, dead: false };
+          return { ok: true, dead: false, status: res.status, error: '' };
         }
         const text = await res.text();
         console.error(`[push-notify] send failed: ${res.status} ${text}`);
-        return { ok: false, dead: isUnregistered(text) };
+        return { ok: false, dead: isUnregistered(text), status: res.status, error: text.slice(0, 200) };
       } catch (e) {
         console.error(`[push-notify] send error: ${String(e)}`);
-        return { ok: false, dead: false };
+        return { ok: false, dead: false, status: 0, error: String(e).slice(0, 200) };
       }
     }),
   );
@@ -551,6 +822,8 @@ serve(async (req: Request) => {
       sent += 1;
     } else {
       failed += 1;
+      fcmStatuses.push(r.status);
+      if (r.error) fcmErrors.push(r.error);
       if (r.dead) deadTokens.push(tokens[i].token as string);
     }
   });
@@ -565,24 +838,42 @@ serve(async (req: Request) => {
   let webFailed = 0;
   const deadWebSubs: string[] = [];
 
-  if (vapidPrivateKeyPkcs8B64 && webSubs.length > 0) {
+  const webStatuses: number[] = [];
+  const webErrors: string[] = [];
+
+  if (vapidKey && webSubs.length > 0) {
+    // فحص مرة واحدة: هل المفتاح الخاص يطابق المفتاح العام المعلن؟
+    // إن لم يطابق، فكل 401/403 سببها المفتاح وليست الاشتراكات → لا نحذفها.
+    const keyVerified = await vapidKeyMatchesPublic(vapidKey);
+    if (!keyVerified) {
+      console.error('[push-notify] VAPID: المفتاح الخاص لا يطابق المفتاح العام — كل إرسال الويب سيفشل');
+    }
     // Also concurrent, same reason as the FCM loop above.
     const webResults = await Promise.all(
       webSubs.map(async (sub) => {
-        const res = await sendWebPush(sub.endpoint, sub.p256dh, sub.auth, JSON.stringify({
-          title: content.title,
-          body: content.body,
-          tab: content.tab,
-          urgent: content.urgent,
-        }), vapidPrivateKeyPkcs8B64);
+        const res = await sendWebPush(
+          sub.endpoint,
+          sub.p256dh,
+          sub.auth,
+          JSON.stringify({
+            title: content.title,
+            body: content.body,
+            tab: content.tab,
+            urgent: content.urgent,
+          }),
+          vapidKey as CryptoKey,
+          keyVerified,
+        );
         return { endpoint: sub.endpoint, ...res };
       }),
     );
     for (const r of webResults) {
+      webStatuses.push(r.status);
       if (r.ok) {
         webSent += 1;
       } else {
         webFailed += 1;
+        if (r.error) webErrors.push(r.error);
         if (r.gone) deadWebSubs.push(r.endpoint);
       }
     }
@@ -602,6 +893,16 @@ serve(async (req: Request) => {
       webSent,
       webFailed,
       webRemoved: deadWebSubs.length,
+      // تشخيص سريع: أكواد HTTP لخدمة الـ push + أول رسائل الخطأ
+      webStatuses,
+      webErrors: webErrors.slice(0, 3),
+      fcmStatuses,
+      fcmErrors: fcmErrors.slice(0, 3),
+      vapidReady: Boolean(vapidKey),
+      vapidKeyError: vapidKeyError || undefined,
+      // false = المفتاح الخاص في الأسرار لا يطابق WEBPUSH_VAPID_PUBLIC_KEY
+      // (سبب 401/403 من خدمات Push رغم وجود اشتراك سليم).
+      vapidKeyMatchesPublic: vapidKey ? await vapidKeyMatchesPublic(vapidKey) : false,
       title: content.title,
     }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },

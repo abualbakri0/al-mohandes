@@ -433,16 +433,16 @@ export default function ScheduleView({ isDeveloper, department }: Props) {
                   return (
                     <div
                       key={lecture.id}
-                      className="flex items-center justify-between px-5 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group animate-slide-in"
+                      className="flex items-start justify-between gap-2 px-4 sm:px-5 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group animate-slide-in"
                     >
-                      <div className="flex items-center gap-4">
+                      <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
                         {lecture.is_holiday ? (
-                          <div className="w-1 h-12 rounded-full bg-emerald-500" />
+                          <div className="w-1 h-12 rounded-full bg-emerald-500 shrink-0" />
                         ) : (
-                          <div className={`w-1 h-12 rounded-full ${style?.bar ?? 'bg-teal-500'}`} />
+                          <div className={`w-1 h-12 rounded-full shrink-0 ${style?.bar ?? 'bg-teal-500'}`} />
                         )}
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                             {lecture.is_holiday ? (
                               <div className="flex items-center gap-2">
                                 <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
@@ -451,42 +451,42 @@ export default function ScheduleView({ isDeveloper, department }: Props) {
                                 <h4 className="font-semibold text-emerald-700">إجازة</h4>
                               </div>
                             ) : (
-                              <h4 className="font-semibold text-slate-800 dark:text-slate-100">{lecture.subject}</h4>
+                              <h4 className="min-w-0 font-semibold leading-relaxed break-words text-slate-800 dark:text-slate-100">{lecture.subject}</h4>
                             )}
                             {lecture.department && !lecture.is_holiday && style && (
-                              <span className={`flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${style.badge}`}>
+                              <span className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-medium px-2 py-0.5 rounded-full ${style.badge}`}>
                                 <style.icon className="w-3 h-3" />
                                 {displayDepartment(lecture.department)}
                               </span>
                             )}
                             {lecture.__pending && (
-                              <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                              <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
                                 <CloudUpload className="w-3 h-3" />
                                 بانتظار النشر
                               </span>
                             )}
                             {lecture.is_holiday && lecture.department && (
-                              <span className={`flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${DEPT_STYLES[lecture.department]?.badge ?? 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                              <span className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-medium px-2 py-0.5 rounded-full ${DEPT_STYLES[lecture.department]?.badge ?? 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
                                 {displayDepartment(lecture.department)}
                               </span>
                             )}
                           </div>
                           {!lecture.is_holiday && (
-                            <div className="flex items-center gap-4 mt-1 text-sm text-slate-500 dark:text-slate-400 flex-wrap">
-                              <span className="flex items-center gap-1">
-                                <Clock className="w-4 h-4" />
+                            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
+                              <span className="flex items-center gap-1 whitespace-nowrap">
+                                <Clock className="w-4 h-4 shrink-0" />
                                 <span>{formatTimeRange(lecture.start_time, lecture.end_time)}</span>
                               </span>
                               {lecture.location && (
-                                <span className="flex items-center gap-1">
-                                  <MapPin className="w-4 h-4" />
-                                  {lecture.location}
+                                <span className="flex min-w-0 items-center gap-1">
+                                  <MapPin className="w-4 h-4 shrink-0" />
+                                  <span className="break-words">{lecture.location}</span>
                                 </span>
                               )}
                               {lecture.teacher && (
-                                <span className="flex items-center gap-1">
-                                  <User className="w-4 h-4" />
-                                  {lecture.teacher}
+                                <span className="flex min-w-0 items-center gap-1">
+                                  <User className="w-4 h-4 shrink-0" />
+                                  <span className="break-words">{lecture.teacher}</span>
                                 </span>
                               )}
                             </div>
@@ -494,7 +494,7 @@ export default function ScheduleView({ isDeveloper, department }: Props) {
                         </div>
                       </div>
                       {isDeveloper && (
-                        <div className="flex items-center gap-1">
+                        <div className="flex shrink-0 items-center gap-1">
                           <button
                             onClick={() => startEdit(lecture)}
                             title={lecture.__pending ? 'تعديل (لم يُنشر بعد)' : 'تعديل'}

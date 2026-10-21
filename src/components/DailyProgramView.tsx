@@ -183,34 +183,35 @@ export default function DailyProgramView({ userId, department }: Props) {
             ) : (
               <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
                 {dayLectures.map((l) => (
-                  <li key={l.id} className="px-5 py-3.5 flex items-center gap-3">
-                    <div className="text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/40 px-2 py-1 rounded-lg whitespace-nowrap">
+                  <li key={l.id} className="px-4 sm:px-5 py-3.5 flex items-start gap-2.5 sm:gap-3">
+                    <div className="shrink-0 text-[11px] sm:text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/40 px-2 py-1 rounded-lg whitespace-nowrap">
                       {formatTimeRange(l.start_time, l.end_time)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate">{l.subject}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
+                      <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm leading-relaxed break-words">{l.subject}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                         {l.is_holiday ? (
                           <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
-                            <Coffee className="w-3 h-3" /> إجازة
+                            <Coffee className="w-3 h-3 shrink-0" /> إجازة
                           </span>
                         ) : (
                           <>
                             {l.location && (
-                              <span className="inline-flex items-center gap-1">
-                                <MapPin className="w-3 h-3" /> {l.location}
+                              <span className="inline-flex min-w-0 items-center gap-1">
+                                <MapPin className="w-3 h-3 shrink-0" />
+                                <span className="break-words">{l.location}</span>
                               </span>
                             )}
-                            {l.teacher && <span>م. {l.teacher}</span>}
+                            {l.teacher && <span className="break-words">م. {l.teacher}</span>}
                           </>
                         )}
-                      </p>
+                        {l.department && (
+                          <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full whitespace-nowrap">
+                            {displayDepartment(l.department)}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    {l.department && (
-                      <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full whitespace-nowrap">
-                        {displayDepartment(l.department)}
-                      </span>
-                    )}
                   </li>
                 ))}
               </ul>
@@ -233,9 +234,9 @@ export default function DailyProgramView({ userId, department }: Props) {
                 {dayAssignments.map((a) => {
                   const done = !!progress[a.id];
                   return (
-                    <li key={a.id} className="px-5 py-3.5 flex items-center gap-3">
+                    <li key={a.id} className="px-4 sm:px-5 py-3.5 flex items-start gap-3">
                       <div
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 border ${
+                        className={`mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 border ${
                           done
                             ? 'bg-emerald-500 border-emerald-500 text-white'
                             : 'bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600'
@@ -244,18 +245,20 @@ export default function DailyProgramView({ userId, department }: Props) {
                         {done && <Check className="w-4 h-4" />}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className={`font-semibold text-sm truncate ${done ? 'text-slate-400 line-through' : 'text-slate-800 dark:text-slate-100'}`}>
+                        <p className={`font-semibold text-sm leading-relaxed break-words ${done ? 'text-slate-400 line-through' : 'text-slate-800 dark:text-slate-100'}`}>
                           {a.subject}: {a.title}
                         </p>
-                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
-                          موعد التسليم {dateLabel(new Date(`${a.due_date}T00:00:00`))}
-                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                          <span className="text-amber-600 dark:text-amber-400">
+                            موعد التسليم {dateLabel(new Date(`${a.due_date}T00:00:00`))}
+                          </span>
+                          {a.department && (
+                            <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full whitespace-nowrap">
+                              {displayDepartment(a.department)}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      {a.department && (
-                        <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full whitespace-nowrap">
-                          {displayDepartment(a.department)}
-                        </span>
-                      )}
                     </li>
                   );
                 })}
@@ -277,26 +280,27 @@ export default function DailyProgramView({ userId, department }: Props) {
             ) : (
               <ul className="divide-y divide-slate-100 dark:divide-slate-700/60">
                 {dayExams.map((e) => (
-                  <li key={e.id} className="px-5 py-3.5 flex items-center gap-3">
-                    <div className="text-xs font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 px-2 py-1 rounded-lg whitespace-nowrap">
+                  <li key={e.id} className="px-4 sm:px-5 py-3.5 flex items-start gap-2.5 sm:gap-3">
+                    <div className="shrink-0 text-[11px] sm:text-xs font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 px-2 py-1 rounded-lg whitespace-nowrap">
                       {formatTimeRange(e.start_time, e.end_time)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm truncate">{e.subject}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
+                      <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm leading-relaxed break-words">{e.subject}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                         {e.location && (
-                          <span className="inline-flex items-center gap-1">
-                            <MapPin className="w-3 h-3" /> {e.location}
+                          <span className="inline-flex min-w-0 items-center gap-1">
+                            <MapPin className="w-3 h-3 shrink-0" />
+                            <span className="break-words">{e.location}</span>
                           </span>
                         )}
-                        {e.teacher && <span>م. {e.teacher}</span>}
-                      </p>
+                        {e.teacher && <span className="break-words">م. {e.teacher}</span>}
+                        {e.department && (
+                          <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full whitespace-nowrap">
+                            {displayDepartment(e.department)}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    {e.department && (
-                      <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full whitespace-nowrap">
-                        {displayDepartment(e.department)}
-                      </span>
-                    )}
                   </li>
                 ))}
               </ul>
