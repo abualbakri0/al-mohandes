@@ -275,6 +275,20 @@ function isMissingRpc(error: unknown): boolean {
 }
 
 export async function fetchRegistrations(): Promise<Registration[]> {
+  // Privacy: `registrations` is no longer readable with the public key
+  // (migration 20261023011000). The developer-gated RPC is the only path —
+  // it needs the x-dev-token header, which devAwareFetch attaches. When the
+  // grant is missing/expired the RPC answers 42501 and the caller (which uses
+  // fetchWithCache) keeps the last snapshot instead of emptying the screen.
+  const rpc = await supabase.rpc('list_registrations');
+  if (!rpc.error) {
+    return (rpc.data ?? []) as unknown as Registration[];
+  }
+  // Backend migration not applied yet → legacy read. This is also what keeps
+  // a rolling deploy working: the old table read still succeeds until the
+  // enforcement migration runs.
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   const { data, error } = await supabase
     .from('registrations')
     .select('*')
@@ -283,15 +297,41 @@ export async function fetchRegistrations(): Promise<Registration[]> {
   return data ?? [];
 }
 
-export async function addRegistration(name: string, phone: string, department?: string, password?: string): Promise<Registration> {
-  // Insert the base registration. The registrations table has no password
-  // columns; passwords live in the dedicated user_passwords table (below).
+/**
+ * Create a student registration row and return it.
+ *
+ * Security: `INSERT ... RETURNING` (supabase `.insert().select()`) requires
+ * SELECT on the table, which is revoked for the public key by migration
+ * 20261023011000. `register_student` does the insert server-side and forces
+ * `is_approved = false`, so students keep signing up after the lock-down.
+ * The legacy branch only runs while that migration is not applied yet.
+ */
+async function insertRegistration(name: string, phone: string, department?: string): Promise<Registration> {
+  const rpc = await supabase.rpc('register_student', {
+    p_name: name,
+    p_phone: phone,
+    p_department: department ?? null,
+  });
+  if (!rpc.error) {
+    const rows = (rpc.data ?? []) as unknown as Registration[];
+    if (rows.length === 0) throw new Error('تعذّر إنشاء الحساب');
+    return rows[0];
+  }
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   const { data, error } = await supabase
     .from('registrations')
     .insert({ name, phone, department: department ?? null })
     .select()
     .single();
   if (error) throw error;
+  return data;
+}
+
+export async function addRegistration(name: string, phone: string, department?: string, password?: string): Promise<Registration> {
+  // The registrations table has no password columns; passwords live in the
+  // dedicated user_passwords table (below).
+  const data = await insertRegistration(name, phone, department);
 
   // If a password was provided, store it server-side via set_password RPC
   // (the hash is computed in Postgres — never in the browser). Falls back to
@@ -317,6 +357,19 @@ export async function approveRegistration(id: string): Promise<void> {
 }
 
 export async function checkRegistration(phone: string): Promise<Registration | null> {
+  // Security: reading `registrations` with the public key is revoked
+  // (migration 20261023011000) because it exposed every student's name and
+  // phone. `registration_by_phone` returns ONE row, and only for a phone the
+  // caller already knows — it is the login / deleted-account-guard path.
+  const rpc = await supabase.rpc('registration_by_phone', { p_phone: phone });
+  if (!rpc.error) {
+    const rows = (rpc.data ?? []) as unknown as Registration[];
+    if (rows.length === 0) return null;
+    return withPasswordStatus(rows[0], phone);
+  }
+  // Backend migration not applied yet → legacy read.
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   // Use order + limit(1) instead of maybeSingle() so duplicate phone rows
   // (from earlier testing) never make this query throw.
   const { data, error } = await supabase
@@ -328,7 +381,11 @@ export async function checkRegistration(phone: string): Promise<Registration | n
   if (error) throw error;
   if (!data || data.length === 0) return null;
 
-  const reg = data[0] as Registration;
+  return withPasswordStatus(data[0] as Registration, phone);
+}
+
+/** Attach the password state to a registration row without ever pulling a hash. */
+async function withPasswordStatus(reg: Registration, phone: string): Promise<Registration> {
   // Security: password hashes must NEVER be pulled to the client (RPC mode).
   // While the backend migration is not applied yet, the legacy fallback keeps
   // the old client-side hash (only possible while the old SELECT policy on
@@ -1152,6 +1209,14 @@ export async function uploadReferenceFile(file: File): Promise<{ path: string; s
 }
 
 export async function fetchFeedback(): Promise<FeedbackMessage[]> {
+  // Privacy: the public key can no longer read feedback_messages
+  // (migration 20261023011000) — sender names/phones/messages were exposed.
+  const rpc = await supabase.rpc('list_feedback');
+  if (!rpc.error) {
+    return (rpc.data ?? []) as unknown as FeedbackMessage[];
+  }
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   const { data, error } = await supabase
     .from('feedback_messages')
     .select('*')
@@ -1167,6 +1232,22 @@ export async function addFeedback(
   subject: string,
   message: string
 ): Promise<FeedbackMessage> {
+  // `.insert().select()` needs SELECT on the table (revoked above), so the
+  // insert+return happens server-side in submit_feedback.
+  const rpc = await supabase.rpc('submit_feedback', {
+    p_sender_name: senderName,
+    p_sender_phone: senderPhone,
+    p_message_type: messageType,
+    p_subject: subject,
+    p_message: message,
+  });
+  if (!rpc.error) {
+    const rows = (rpc.data ?? []) as unknown as FeedbackMessage[];
+    if (rows.length === 0) throw new Error('تعذّر إرسال الملاحظة');
+    return rows[0];
+  }
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   const { data, error } = await supabase
     .from('feedback_messages')
     .insert({ sender_name: senderName, sender_phone: senderPhone, message_type: messageType, subject, message })

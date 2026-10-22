@@ -54,7 +54,10 @@ android {
         applicationId "com.almohanndes.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 29
+        // 31 = first build signed with the NEW keystore (rotated 2026-10-22).
+        // Android refuses to update an app whose signature changed, so the
+        // three current users must uninstall once before installing this build.
+        versionCode 31
         versionName "1.0"
         // Integrity pin consumed by MainActivity's signature check.
         buildConfigField "String", "APP_SIGNER_SHA256", "\"${signerSha256}\""
