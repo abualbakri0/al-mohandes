@@ -1,4 +1,5 @@
 import { supabase, type Registration, type Lecture, type Assignment, type StudyTask, type Notification, type Exam, type AppSettings, type Department, type ReferenceMaterial, type FeedbackMessage, type FeedbackType } from './supabase';
+import { DEV_GRANT_STORAGE_KEY, setDevToken } from './devAuth';
 import { useState, useEffect } from 'react';
 import type { TabId } from '@/components/Navbar';
 
@@ -1210,7 +1211,7 @@ export async function fetchSettings(): Promise<AppSettings | null> {
  * (pre-migration compatibility); after RUN-THIS-IN-SUPABASE.sql is executed
  * a forged flag is rejected and cleared by validateDeveloperGrant().
  */
-const DEV_GRANT_KEY = 'dev_grant';
+const DEV_GRANT_KEY = DEV_GRANT_STORAGE_KEY;
 
 /** Internal: the stored signed grant token (null when absent/unreadable). */
 function getDevGrantToken(): string | null {
@@ -1229,6 +1230,8 @@ export function setDeveloperSession(active: boolean): void {
     } else {
       localStorage.removeItem('is_dev');
       localStorage.removeItem(DEV_GRANT_KEY);
+      // Clear the stored grant so no further request carries the dev header.
+      setDevToken(null);
     }
   } catch {
     /* storage unavailable */
@@ -1283,52 +1286,27 @@ export async function validateDeveloperGrant(): Promise<boolean> {
 
 /**
  * Verify the developer access code server-side (dev_password never reaches
- * the browser once the RPC is deployed). On success a signed 30-day grant
- * token is stored for validateDeveloperGrant(). While the RPC is not deployed
- * yet the legacy direct settings read keeps old installs working; any other
- * failure fails closed.
+ * the browser). On success a signed 30-day grant token is stored for
+ * validateDeveloperGrant() and attached to every request as `x-dev-token`,
+ * which is what authorises writes in RLS. Any failure fails closed.
  */
 export async function verifyDeveloperCode(code: string): Promise<boolean> {
   const trimmed = code.trim();
   if (!trimmed) return false;
   try {
     const { data, error } = await supabase.rpc('verify_developer_code', { p_code: trimmed });
-    if (!error) {
-      const ok = typeof data === 'string' ? data.length > 0 : data === true;
-      if (ok) {
-        if (typeof data === 'string' && data.length > 0) {
-          try {
-            localStorage.setItem(DEV_GRANT_KEY, data);
-          } catch {
-            /* storage unavailable */
-          }
-        }
-        setDeveloperSession(true);
+    if (error) return false; // includes the rate-limit rejection → fail closed
+    const ok = typeof data === 'string' ? data.length > 0 : data === true;
+    if (ok) {
+      if (typeof data === 'string' && data.length > 0) {
+        setDevToken(data); // also persisted in localStorage (devAuth)
       }
-      return ok;
+      setDeveloperSession(true);
     }
-    if (!isMissingRpc(error)) return false; // transient → fail closed
+    return ok;
   } catch {
     return false;
   }
-
-  // Pre-migration fallback: RPC not deployed → read dev_password directly
-  // (still possible until RUN-THIS-IN-SUPABASE.sql is executed).
-  try {
-    const { data, error } = await supabase.from('app_settings').select('dev_password').limit(1);
-    if (
-      !error &&
-      Array.isArray(data) &&
-      data.length > 0 &&
-      (data[0] as { dev_password?: string | null }).dev_password === trimmed
-    ) {
-      setDeveloperSession(true);
-      return true;
-    }
-  } catch {
-    /* ignore */
-  }
-  return false;
 }
 
 export async function updateSettings(updates: Partial<Pick<AppSettings, 'academic_level' | 'semester' | 'semester_start_date'>>): Promise<void> {
@@ -1349,14 +1327,11 @@ export async function updateSettings(updates: Partial<Pick<AppSettings, 'academi
 
 /**
  * Change the developer code server-side. The CURRENT code is verified inside
- * Postgres (change_dev_code RPC) — once Section 10 is deployed, dev_password
- * accepts no direct writes from the client, so an attempt without the current
- * code is rejected no matter how it is issued. Every previously issued grant
- * token is signed with the old code and dies with it; on success a fresh
- * 30-day token for the new code is minted immediately so the active session
- * stays developer. While the RPC is not deployed yet, the legacy direct
- * compare-and-update path keeps old installs working; any other failure
- * fails closed.
+ * Postgres (change_dev_code RPC) — dev_password accepts no direct writes from
+ * the client, so an attempt without the current code is rejected no matter how
+ * it is issued. Every previously issued grant token is signed with the old code
+ * and dies with it; on success a fresh 30-day token for the new code is minted
+ * immediately so the active session stays developer. Any failure fails closed.
  */
 export async function changeDevCode(current: string, next: string): Promise<boolean> {
   const cur = current.trim();
@@ -1364,29 +1339,14 @@ export async function changeDevCode(current: string, next: string): Promise<bool
   if (!cur || !nxt || nxt.length < 4) return false;
   try {
     const { data, error } = await supabase.rpc('change_dev_code', { p_current: cur, p_new: nxt });
-    if (!error) {
-      const ok = (data as { ok?: unknown } | null)?.ok === true;
-      if (ok) {
-        // The stored grant token was signed with the previous code and is now
-        // dead server-side — replace it before returning to keep the session.
-        await verifyDeveloperCode(nxt);
-      }
-      return ok;
+    if (error) return false;
+    const ok = (data as { ok?: unknown } | null)?.ok === true;
+    if (ok) {
+      // The stored grant token was signed with the previous code and is now
+      // dead server-side — replace it before returning to keep the session.
+      await verifyDeveloperCode(nxt);
     }
-    if (!isMissingRpc(error)) return false; // transient → fail closed
-  } catch {
-    return false;
-  }
-
-  // Pre-migration fallback: RPC not deployed → compare + write directly
-  // (still possible until RUN-THIS-IN-SUPABASE.sql section 10 is executed).
-  try {
-    const { data, error } = await supabase.from('app_settings').select('id, dev_password').limit(1);
-    if (error || !Array.isArray(data) || data.length === 0) return false;
-    const row = data[0] as { id: string; dev_password?: string | null };
-    if (row.dev_password !== cur) return false;
-    const { error: writeErr } = await supabase.from('app_settings').update({ dev_password: nxt }).eq('id', row.id);
-    return !writeErr;
+    return ok;
   } catch {
     return false;
   }

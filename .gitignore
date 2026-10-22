@@ -19,7 +19,17 @@ dist-ssr
 # حماية مفاتيح التوقيع والأسرار — لا ترفعها أبداً على Git
 *.keystore
 *.jks
-*.keystore.properties
+# أي keystore.properties في أي مجلد (كان أحدها خارج التغطية سابقاً)
+keystore.properties
+**/keystore.properties
+*.bks
+*.p12
+*.pfx
+# تقارير R8/ProGuard — تكشف أسماء كلاساتك وبنية الكود
+mapping.txt
+*.mapping.txt
+# متغيّرات الاستضافة (تحتوي مفاتيح حقيقية)
+RAILWAY-VARIABLES.txt
 android/keystore.properties
 android/almohanndes.keystore
 android/app/google-services.json

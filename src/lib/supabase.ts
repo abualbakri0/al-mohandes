@@ -1,9 +1,45 @@
 import { createClient } from '@supabase/supabase-js';
+import { DEV_TOKEN_HEADER, getDevToken } from './devAuth';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+/**
+ * Every Supabase request (REST + Storage) is routed through this wrapper so a
+ * valid developer grant travels as the `x-dev-token` header.
+ *
+ * Server side, RLS policies call `public.dev_token_ok()` which reads that
+ * header, so INSERT/UPDATE/DELETE on content is authorised in Postgres instead
+ * of trusting whatever the browser claims. Without a token the header is not
+ * sent at all → students keep read-only access, exactly as before (no extra
+ * CORS preflight, no behaviour change).
+ *
+ * Scope is limited to `/rest/v1/` and `/storage/v1/` on purpose: the Realtime
+ * channel (notifications) is left completely untouched.
+ */
+const DEV_SCOPED_PATHS = ['/rest/v1/', '/storage/v1/'];
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (typeof URL !== 'undefined' && input instanceof URL) return input.toString();
+  return (input as Request)?.url ?? '';
+}
+
+const devAwareFetch: typeof fetch = (input, init) => {
+  const token = getDevToken();
+  if (!token || !DEV_SCOPED_PATHS.some((path) => requestUrl(input).includes(path))) {
+    return fetch(input, init);
+  }
+
+  const baseHeaders = init?.headers ?? (input instanceof Request ? input.headers : undefined);
+  const headers = new Headers(baseHeaders);
+  headers.set(DEV_TOKEN_HEADER, token);
+  return fetch(input, { ...init, headers });
+};
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: { fetch: devAwareFetch },
+});
 
 export type Department = 'ميكاترونكس' | 'كهربائية' | 'مشترك';
 export const DEPARTMENTS: { id: Department; label: string }[] = [
