@@ -1,6 +1,9 @@
 // Scheduled lecture reminders + evening summary via NATIVE notifications.
 // - 60min & 15min before each upcoming lecture (today + tomorrow)
 // - Daily 19:00 evening summary of tomorrow's lectures
+// Friday is a fixed weekly holiday → NO lecture reminders are scheduled for it
+// (the evening summary then announces Friday as a holiday). Assignment, exam
+// and study-task reminders are NOT affected.
 // Reschedules whenever department changes or every 30min.
 // Works when app is open OR minimized (system alarm).
 
@@ -20,6 +23,9 @@ const DAY_INDEX: Record<string, number> = {
   'الأحد': 0, 'الإثنين': 1, 'الثلاثاء': 2, 'الأربعاء': 3,
   'الخميس': 4, 'الجمعة': 5, 'السبت': 6,
 };
+
+// الجمعة إجازة أسبوعية ثابتة — لا تُجدَّل لها تذكيرات محاضرات إطلاقًا.
+const WEEKLY_HOLIDAY_DAY = 'الجمعة';
 
 function nextDateForDay(dayName: string, timeHHmm: string): Date | null {
   const targetIdx = DAY_INDEX[dayName];
@@ -115,7 +121,11 @@ export function useLectureReminders(department: Department | null, userName?: st
         return;
       }
       if (cancelled || myGen !== generation.current) return;
-      const items = lectures.filter((l) => !l.is_holiday);
+      // ── استثناء الجمعة (إجازة أسبوعية ثابتة) ──
+      // تُستبعد محاضرات يوم الجمعة من تذكيرات المحاضرات (ومن ملخص مساء الخميس،
+      // فيظهر "غداً إجازة"). لا تأثير إطلاقًا على تذكيرات المهام أو التكاليف أو
+      // الاختبارات — فهي تُبنى من قوائمها الخاصة أدناه.
+      const items = lectures.filter((l) => !l.is_holiday && l.day !== WEEKLY_HOLIDAY_DAY);
       const now = new Date();
 
       // 1) Lecture reminders (60 + 15 min before)
