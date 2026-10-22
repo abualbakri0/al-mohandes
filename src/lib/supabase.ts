@@ -19,22 +19,54 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
  */
 const DEV_SCOPED_PATHS = ['/rest/v1/', '/storage/v1/'];
 
+/** HTTP methods that need a developer grant to pass RLS. */
+const MUTATING_METHODS = ['POST', 'PATCH', 'PUT', 'DELETE'];
+
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === 'string') return input;
   if (typeof URL !== 'undefined' && input instanceof URL) return input.toString();
   return (input as Request)?.url ?? '';
 }
 
+function requestMethod(input: RequestInfo | URL, init: RequestInit | undefined): string {
+  const explicit = init?.method ?? (input instanceof Request ? input.method : undefined);
+  return (explicit ?? 'GET').toUpperCase();
+}
+
+/**
+ * A rejected write is almost never a real outage: it means the running bundle
+ * did not send the grant (an APK built before the header existed, a cached
+ * WebView/PWA bundle) or the 30-day grant expired. Record the last rejection so
+ * a stale client can be identified on-device (`__devAuthBlocked` in DevTools).
+ * The record holds no secret — only the method, URL and HTTP status, which the
+ * Network tab already exposes.
+ */
+export type BlockedWrite = { method: string; url: string; status: number; at: string };
+
+function watchWrite(input: RequestInfo | URL, init: RequestInit | undefined, call: Promise<Response>): Promise<Response> {
+  const method = requestMethod(input, init);
+  if (!MUTATING_METHODS.includes(method)) return call;
+  return call.then((res) => {
+    if (res.status === 401 || res.status === 403) {
+      const blocked: BlockedWrite = { method, url: requestUrl(input), status: res.status, at: new Date().toISOString() };
+      (globalThis as unknown as { __devAuthBlocked?: BlockedWrite }).__devAuthBlocked = blocked;
+      // console.* is stripped from production bundles — kept for `npm run dev`.
+      console.error('[dev-auth] write blocked (stale bundle or expired grant)', blocked);
+    }
+    return res;
+  });
+}
+
 const devAwareFetch: typeof fetch = (input, init) => {
   const token = getDevToken();
   if (!token || !DEV_SCOPED_PATHS.some((path) => requestUrl(input).includes(path))) {
-    return fetch(input, init);
+    return watchWrite(input, init, fetch(input, init));
   }
 
   const baseHeaders = init?.headers ?? (input instanceof Request ? input.headers : undefined);
   const headers = new Headers(baseHeaders);
   headers.set(DEV_TOKEN_HEADER, token);
-  return fetch(input, { ...init, headers });
+  return watchWrite(input, init, fetch(input, { ...init, headers }));
 };
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
