@@ -148,9 +148,13 @@ self.addEventListener('fetch', (event) => {
           const fresh = await fetch(req);
           if (fresh && fresh.ok) {
             const cache = await caches.open(CACHE);
-            const copy = fresh.clone();
-            cache.put(req, copy).catch(() => {});
-            cache.put(SHELL_URL, fresh).catch(() => {});
+            // ⚠️ cache.put يستهلك body الاستجابة ويتقفل. لذلك نمرّر clone لكل
+            // عملية تخزين، ونُعيد الكائن الأصلي سليمًا للصفحة. تمرير نفس الكائن
+            // إلى put ثم إرجاعه كان يجعل المتصفح يرفض الاستجابة:
+            // "a Response whose body is locked cannot be used to respond to a
+            // request" → شاشة net::ERR_FAILED عند كل فتح للتطبيق/الموقع.
+            cache.put(req, fresh.clone()).catch(() => {});
+            cache.put(SHELL_URL, fresh.clone()).catch(() => {});
           }
           return fresh;
         } catch (err) {
