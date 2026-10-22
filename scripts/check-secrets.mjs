@@ -26,7 +26,7 @@ const SELF = 'scripts/check-secrets.mjs';
 
 /** أسماء الملفات التي لا يجوز أن تكون متتبَّعة في Git. */
 const FORBIDDEN_FILES = [
-  { re: /(^|\/)keystore\.properties$/i, why: 'keystore passwords' },
+  { re: /(^|\/)keystore\.properties(\.[^/]+)?$/i, why: 'keystore passwords' },
   { re: /\.(keystore|jks|bks|p12|pfx)$/i, why: 'app signing key' },
   { re: /(^|\/)mapping\.txt$/i, why: 'R8 mapping (exposes class/member names)' },
   { re: /(^|\/)\.env(\.(?!example$)[^/]+)?$/i, why: 'real environment variables' },

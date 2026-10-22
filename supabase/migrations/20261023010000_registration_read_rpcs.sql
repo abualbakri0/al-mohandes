@@ -244,6 +244,6 @@ GRANT EXECUTE ON FUNCTION public.list_feedback() TO anon, authenticated;
 -- ============================================================
 -- 6) تحقق سريع (نفّذه يدوياً بعد التنفيذ)
 -- ============================================================
--- SELECT public.registration_by_phone('779809243');   -- صف واحد فقط
+-- SELECT public.registration_by_phone('7XXXXXXXX');   -- صف واحد فقط
 -- SELECT * FROM public.list_registrations();          -- 42501 بلا توكين
 -- SELECT * FROM public.list_feedback();               -- 42501 بلا توكين

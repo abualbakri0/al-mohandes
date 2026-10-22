@@ -46,6 +46,20 @@ npm run key:new
 انسخ ملف الـ keystore **فوراً** إلى مدير كلمات مرور أو قرص خارج OneDrive.
 من نسخة واحدة فقط: لا تعتمد على OneDrive وحده (حساب مسروق = مفتاح مسروق).
 
+> **قاعدة كلمة السر:** لا تشتقّها من القديمة بأي شكل (لا بادئة، لا لاحقة، لا حرف إضافي).
+> أُبطلت محاولة سابقة كانت كلمة السر فيها = أول 14 حرفاً من كلمة السر المسرَّبة.
+> السكربت الآن يرفض أي كلمة سر تحتوي القديمة أو تكون جزءاً منها.
+
+> **النسخة الاحتياطية:** السكربت يحفظ القديم باسم `android/keystore.properties.bak`
+> (مستثنى من Git). لا تضف `.bak` ولا `.old` إلى Git أبداً — `check-secrets.mjs` يفشل عندها.
+
+> **إذا تسرّبت كلمة السر وحدها** (دون ملف الـ keystore): لا تحتاج مفتاحاً جديداً ولا إعادة تثبيت،
+> غيّر كلمة السر فقط:
+> ```powershell
+> keytool -storepasswd -keystore android\almohanndes-2026.keystore -alias almohanndes
+> ```
+> ثم اكتب الكلمة الجديدة في `android/keystore.properties`. البصمة لا تتغير والـAPK المنشور يبقى صالحاً.
+
 > لا تحذف `android/almohanndes.keystore` القديم من قرصك قبل انتهاء كل شيء (للمقارنة فقط)،
 > لكنه **ميت أمنياً**: لا تبنِ به ولا تنشر.
 
@@ -57,9 +71,9 @@ cd android
 .\gradlew.bat assembleRelease
 cd ..
 
-# تأكيد أن الـAPK موقّع بالمفتاح الجديد (قارن البصمة بما طبعه السكربت)
-& "$env:JAVA_HOME\bin\keytool.exe" -printcert -jarfile android\app\build\outputs\apk\release\app-release.apk |
-  Select-String 'SHA256'
+# تأكيد أن الـAPK موقّع بالمفتاح الجديد (البصمة يجب أن تطابق ما طبعه السكربت)
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\36.0.0\apksigner.bat" verify --print-certs `
+    android\app\build\outputs\apk\release\app-release.apk | Select-String 'SHA-256 digest'
 ```
 إن ظهرت بصمة مختلفة عن التي طبعها `key:new` → لم يُقرأ `keystore.properties`، أعد الخطوة 2.
 

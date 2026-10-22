@@ -19,9 +19,11 @@ dist-ssr
 # حماية مفاتيح التوقيع والأسرار — لا ترفعها أبداً على Git
 *.keystore
 *.jks
-# أي keystore.properties في أي مجلد (كان أحدها خارج التغطية سابقاً)
+# أي keystore.properties في أي مجلد، وأي نسخة احتياطية منه (.old / .bak / .1 ...)
 keystore.properties
+keystore.properties.*
 **/keystore.properties
+**/keystore.properties.*
 *.bks
 *.p12
 *.pfx

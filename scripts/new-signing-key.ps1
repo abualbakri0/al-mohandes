@@ -39,13 +39,17 @@ function Resolve-KeyTool {
 }
 
 function Read-NewPassword {
-    param([string] $Prompt)
+    param([string] $Prompt, [string] $Previous)
     while ($true) {
         $first = Read-Host -Prompt $Prompt -AsSecureString
         $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($first))
         if (-not $plain -or $plain.Length -lt 12) {
             Write-Host '  -> too short: use at least 12 characters.' -ForegroundColor Yellow
+            continue
+        }
+        if ($Previous -and ($Previous.Contains($plain) -or $plain.Contains($Previous))) {
+            Write-Host '  -> this is derived from the OLD (leaked) password. Pick something unrelated.' -ForegroundColor Yellow
             continue
         }
         $second = Read-Host -Prompt "$Prompt (again)" -AsSecureString
@@ -68,6 +72,18 @@ if (-not (Test-Path -LiteralPath $androidDir)) {
     throw "Not a project root: $androidDir not found. Run this from the repository root."
 }
 
+# Guard: a tracked properties file means the password lands in Git history.
+$trackedProps = git ls-files -- 'android/keystore.properties' 'android/keystore.properties.old' 2>$null
+if ($trackedProps) {
+    throw "keystore.properties is TRACKED in Git ($trackedProps). Run: git rm --cached android/keystore.properties && git commit"
+}
+
+# The previous password is only used to reject a new password derived from it.
+$previousPassword = ''
+if (Test-Path -LiteralPath $propsPath) {
+    $previousPassword = (Get-Content -LiteralPath $propsPath | Where-Object { $_ -match '^storePassword=' }) -replace '^storePassword=', ''
+}
+
 Write-Host ''
 Write-Host '=== New release signing key ===' -ForegroundColor Cyan
 Write-Host "keystore : android\$KeyStoreName"
@@ -82,7 +98,7 @@ if (Test-Path -LiteralPath $keyStore) {
     Remove-Item -LiteralPath $keyStore -Force
 }
 
-$password = Read-NewPassword -Prompt 'New keystore password'
+$password = Read-NewPassword -Prompt 'New keystore password' -Previous $previousPassword
 $keytool  = Resolve-KeyTool
 
 Write-Host ''
@@ -101,9 +117,10 @@ if ($LASTEXITCODE -ne 0) { throw "keytool failed with exit code $LASTEXITCODE" }
 
 # Keep the previous properties file around: it points at the leaked key and may
 # still be needed to verify an older APK before it is retired.
+# NOTE: .bak is git-ignored (keystore.properties.*). Never commit it.
 if (Test-Path -LiteralPath $propsPath) {
-    Copy-Item -LiteralPath $propsPath -Destination "$propsPath.old" -Force
-    Write-Host 'Old android/keystore.properties saved as keystore.properties.old' -ForegroundColor DarkGray
+    Copy-Item -LiteralPath $propsPath -Destination "$propsPath.bak" -Force
+    Write-Host 'Old android/keystore.properties saved as keystore.properties.bak (git-ignored)' -ForegroundColor DarkGray
 }
 
 $properties = @(

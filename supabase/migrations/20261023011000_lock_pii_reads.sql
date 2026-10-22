@@ -71,4 +71,4 @@ REVOKE SELECT ON public.feedback_messages FROM PUBLIC, anon, authenticated;
 -- ومن داخل SQL Editor:
 --   SELECT has_table_privilege('anon', 'public.registrations', 'SELECT');      -- false
 --   SELECT has_table_privilege('anon', 'public.feedback_messages', 'SELECT');  -- false
---   SELECT public.registration_by_phone('779809243');                          -- صف واحد
+--   SELECT public.registration_by_phone('7XXXXXXXX');                          -- صف واحد
