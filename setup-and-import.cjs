@@ -15,6 +15,9 @@ if (!PGURL) {
 
 const ROOT = __dirname;
 const MIGRATION = path.join(ROOT, 'supabase', 'migrations', '20261010130000_full_schema_with_user_passwords.sql');
+// Per-user progress isolation (study + assignments). Applied AFTER the data
+// import so the shared `completed` columns are reset once real rows exist.
+const ISOLATION = path.join(ROOT, 'supabase', 'migrations', '20261022100000_ensure_per_user_progress_isolation.sql');
 const DUMP = path.join(ROOT, '_migration_dump');
 
 // Order matters only for FK (none here), but keep a sensible order.
@@ -58,16 +61,20 @@ async function importTable(client, table) {
     await client.connect();
     console.log('Connected to your Supabase project.');
 
-    console.log('\n[1/2] Creating schema (tables + policies + storage)...');
+    console.log('\n[1/3] Creating schema (tables + policies + storage)...');
     const sql = fs.readFileSync(MIGRATION, 'utf8');
     await client.query(sql);
     console.log('Schema created successfully.');
 
-    console.log('\n[2/2] Importing your data...');
+    console.log('\n[2/3] Importing your data...');
     for (const t of TABLES) {
       if (t === 'user_passwords') { console.log('  - user_passwords: (empty; users set passwords on first login)'); continue; }
       await importTable(client, t);
     }
+
+    console.log('\n[3/3] Applying per-user progress isolation (study + assignments)...');
+    await client.query(fs.readFileSync(ISOLATION, 'utf8'));
+    console.log('Progress isolation applied.');
 
     console.log('\nDONE. All tables created and your data imported.');
   } catch (e) {

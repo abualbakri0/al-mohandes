@@ -274,10 +274,11 @@ function handleForegroundPush(n: { data?: unknown; notification?: { title?: stri
     const table = data.table;
     const id = data.id;
     if (!table || !id || !displayBridge) return;
-    // Own edit echoed back as FCM (race: this copy can beat Realtime) —
+    // Own edit/add echoed back as FCM (race: this copy can beat Realtime) —
     // suppress and mark seen so the Realtime copy is suppressed too.
-    if (data.evt === 'update' && consumeSelfWrite(table, id)) {
-      markSeen(table, id, 'update');
+    const evt = data.evt === 'update' ? 'update' : 'insert';
+    if (consumeSelfWrite(table, id)) {
+      markSeen(table, id, evt);
       return;
     }
     // ── الاستثناء 1 (مسار FCM الأمامي): إشعار تأجيل يصل والتطبيق مفتوح —
@@ -300,7 +301,7 @@ function handleForegroundPush(n: { data?: unknown; notification?: { title?: stri
       tab: (data.tab || 'notifications') as TabId,
       urgent: data.urgent === 'true',
       // UPDATE pushes dedupe against the Realtime UPDATE popup (per-evt key).
-      evt: data.evt === 'update' ? 'update' : 'insert',
+      evt,
       showToast: displayBridge.showToast,
       goToTab: displayBridge.goToTab,
     });

@@ -106,8 +106,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
         const row = payload.new as AppNotification;
         if (!matchesDept(row.department, deptRef.current)) return;
-        // Developer self-adds must ALSO alert on this device (no self-suppression for INSERT).
-        consumeSelfWrite('notifications', row.id);
+        // Self-add: the developer's own view already shows a success toast, so
+        // suppress the duplicate realtime popup (mark seen so the parallel FCM
+        // copy is deduped too). Postponement-skip still runs below regardless.
+        const selfAdd = consumeSelfWrite('notifications', row.id);
         const urgent = row.notification_type === 'postponement';
         // ── الاستثناء 1 (تأجيل محاضرة): استخراج الحصة المستهدفة من نص
         // الإشعار وحفظ بصمتها في قائمة التخطي المحلية — فيتخطى منبهها
@@ -119,6 +121,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
               if (parsed) m.markLecturePostponed(parsed.subject, parsed.day, parsed.startTime);
             }).catch(() => {});
           } catch { /* ignore — التخطي تكميلي ولا يمنع العرض */ }
+        }
+        if (selfAdd) {
+          markSeen('notifications', row.id);
+          return;
         }
         emitNow('notifications', row.id, `${urgent ? '🚨 ' : '🔔 '}${row.title}`, row.message, 'notifications', urgent);
       })
@@ -141,7 +147,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'lectures' }, (payload) => {
         const row = payload.new as Lecture;
         if (!matchesDept(row.department, deptRef.current)) return;
-        consumeSelfWrite('lectures', row.id);
+        if (consumeSelfWrite('lectures', row.id)) {
+          markSeen('lectures', row.id);
+          return;
+        }
         const timeRange = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
         const when = row.is_holiday ? ' (إجازة)' : ` — يوم ${row.day} من ${timeRange}`;
         const teacher = row.teacher ? ` — م.${row.teacher}` : '';
@@ -165,7 +174,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'assignments' }, (payload) => {
         const row = payload.new as Assignment;
         if (!matchesDept(row.department, deptRef.current)) return;
-        consumeSelfWrite('assignments', row.id);
+        if (consumeSelfWrite('assignments', row.id)) {
+          markSeen('assignments', row.id);
+          return;
+        }
         emitNow('assignments', row.id, '📝 تكليف جديد', `${row.subject}: ${row.title} — التسليم ${row.due_date}`, 'assignments');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'assignments' }, (payload) => {
@@ -181,7 +193,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'exams' }, (payload) => {
         const row = payload.new as Exam;
         if (!matchesDept(row.department, deptRef.current)) return;
-        consumeSelfWrite('exams', row.id);
+        if (consumeSelfWrite('exams', row.id)) {
+          markSeen('exams', row.id);
+          return;
+        }
         const examTime = row.end_time ? formatTimeRange(row.start_time, row.end_time) : formatTime12(row.start_time);
         const examPlace = row.location ? ` — القاعة ${row.location}` : '';
         const examTeacher = row.teacher ? ` — م.${row.teacher}` : '';
@@ -203,7 +218,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reference_materials' }, (payload) => {
         const row = payload.new as ReferenceMaterial;
         if (!matchesDept(row.department, deptRef.current)) return;
-        consumeSelfWrite('reference_materials', row.id);
+        if (consumeSelfWrite('reference_materials', row.id)) {
+          markSeen('reference_materials', row.id);
+          return;
+        }
         emitNow('references', row.id, '📖 مرجع جديد', row.title, 'references');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'reference_materials' }, (payload) => {
@@ -248,7 +266,10 @@ export function useOfficialRealtime({ department, isDeveloper, showToast, goToTa
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'study_tasks' }, (payload) => {
         const row = payload.new as StudyTask;
         if (!matchesDept(row.department, deptRef.current)) return;
-        consumeSelfWrite('study_tasks', row.id);
+        if (consumeSelfWrite('study_tasks', row.id)) {
+          markSeen('study_tasks', row.id);
+          return;
+        }
         // Only alert on the task's actual day (requirement).
         if (!isStudyDayToday(row.day)) return;
         const kind = row.task_type === 'review' ? 'مراجعة' : 'مذاكرة';
