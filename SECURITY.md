@@ -52,7 +52,7 @@
 | `register_student` برقم/اسم فارغ | ✅ يرفض بـ `400` + `22023` (تحقق داخلي يعمل) |
 | نظام الإشعارات | ✅ لم يُمسّ — `GET /rest/v1/notifications` → 200 كما كان |
 | ملفات keystore في فهرس Git | ✅ نظيفة (`.old` أُخرج من التتبع وحُذف من القرص؛ `.bak` مستثنى) |
-| ملفات keystore في **تاريخ** Git | ❌ ما زالت في 4 commits قديمة (+ `.old` في `e890b82`) → الخطوة 3.3 |
+| ملفات keystore في **تاريخ** Git | ✅ **نظيفة** — مُسح التاريخ بالكامل (`filter-repo`) ودُفع قسرياً؛ صفر كائنات keystore (تفاصيل 3.3) |
 | المستودع | ✅ **خاص (private)** — `api.github.com/repos/abualbakri0/al-mohandes` يُرجع 404 |
 | مفتاح التوقيع | ✅ جديد — بصمة `1a:9e:99:8d:…:c7:7c` (القديم `7B:9F:7C:1B:…` ميت) |
 | كلمة سر المفتاح الجديد | ✅ أُعيد تدويرها (32 حرفاً عشوائياً) — كانت = بادئة كلمة السر المسرَّبة، وأُبطلت |
@@ -157,41 +157,32 @@ keytool -genkeypair -v -keystore android\almohanndes-new.keystore `
 # ثم أعد بناء APK وأعد نشره عبر البوت
 ```
 
-### 3.3 فوري — تنظيف تاريخ Git (الفهرس نظيف مسبقاً، المطلوب مسح التاريخ)
-الملفان خرجا من الفهرس بالفعل (`git rm --cached` جاهز للـcommit)، لكن **التاريخ**
-ما زال يحملهما — والمستودع عام. الخطوات:
+### 3.3 ✅ **مُنفَّذ** — تنظيف تاريخ Git (2026-10-22)
+
+نُفِّذ فعلياً على المستودع المحلي ثم بدُفع قسري إلى GitHub:
 
 ```powershell
-# 0) نسخة احتياطية كاملة قبل أي شيء (إلزامي)
-git clone --mirror https://github.com/abualbakri0/al-mohandes.git ..\backup-al-mohandes.git
-
-# 1) اجعل المستودع خاصاً الآن (يوقف أي نسخ جديد فوراً)
-#    GitHub → Settings → General → Danger Zone → Change visibility → Private
-
-# 2) امسح الملفات من كل التاريخ
-pip install git-filter-repo
-git clone https://github.com/abualbakri0/al-mohandes.git ..\clean && cd ..\clean
-git filter-repo --force --invert-paths `
-  --path "android/almohanndes.keystore" `
-  --path "android/keystore.properties" `
-  --path "احتفظ-بهذا-مجلد/almohanndes.keystore" `
-  --path "احتفظ-بهذا-مجلد/keystore.properties" `
-  --path "توقيع المهندس/almohanndes.keystore" `
-  --path "توقيع المهندس/keystore.properties" `
-  --path "توقيع المهندس/mapping-release-v26"
-
-# 3) تحقّق: يجب ألا يُرجع أي سطر
-git log --all --name-only --pretty=format: -- '*keystore*'
-
-# 4) ادفع بالقوة (يُعيد كتابة الـhashes — كل نسخة عندك يجب إعادة استخراجها)
-git remote add origin https://github.com/abualbakri0/al-mohandes.git
-git push --force --all
-git push --force --tags
+git bundle create "$env:USERPROFILE\almohanndes-history-backup-20261022.bundle" --all   # نسخة احتياطية
+git filter-repo --invert-paths --path-glob '*keystore*' --force
+git reflog expire --expire=now --all; git gc --prune=now
+git push --force origin main
 ```
 
-بعد ذلك: احذف النسخ القديمة من أجهزتك واستخرج نسخة جديدة، ولا تدفع من مجلد
-`project` القديم قبل `git fetch --all && git reset --hard origin/main`.
-(0 forks حالياً — لا حاجة لمراسلة GitHub لإبطال نسخ.)
+| الفحص | النتيجة |
+|---|---|
+| شجرة `HEAD` قبل/بعد | متطابقة — صفر تغيير في الملفات |
+| الملفات / الكوميتات | 246 / 753 قبل = 246 / 753 بعد |
+| أي كائن فيه `keystore` في التاريخ | **0** |
+| `e890b82` (الذي حمل `keystore.properties.old`) | `fatal: Not a valid object name` |
+| `git ls-remote origin` | `main = 1cd55f6` فقط |
+
+حُذفت من كل التاريخ: `android/almohanndes.keystore` · `android/keystore.properties` ·
+`android/keystore.properties.old` · `احتفظ-بهذا-مجلد/*` · `توقيع المهندس/keystore.properties`.
+
+> الكوميتات القديمة قد تبقى «معلّقة» على خوادم GitHub حتى جامع القمامة، لكن المستودع خاص
+> والمفتاح ميت. للضمان المطلق: أعد إنشاء المستودع وادفع `main` الحالي.
+> أي نسخة على جهاز آخر تحتاج استنساخاً جديداً (لا `git pull`).
+
 
 
 ### 3.4 فوري — تدوير الأسرار

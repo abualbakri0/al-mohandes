@@ -103,24 +103,47 @@ node -e "const fs=require('fs');const t=fs.readFileSync('.env','utf8');const g=k
 النتيجة المطلوبة: `401` للجدولين (قبل التنفيذ كانت `200/206` — أي مكشوفة).
 وتأكّد أن التطبيق يعمل: دخول طالب، تسجيل طالب جديد، إرسال ملاحظة، قائمة المطوّر.
 
-## 7) مسح تاريخ Git
+## 7) مسح تاريخ Git — ✅ **نُفِّذ فعلياً (2026-10-22)**
 
-**الأسرع والأضمن (لو لا تهمّك سجلات الكوميتات):**
+ما تم بالضبط (يمكنك تكراره أو التحقق منه):
+
 ```powershell
-# 0) نسخة احتياطية كاملة أولاً (إلزامي)
-Compress-Archive -Path . -DestinationPath ..\backup-project.zip -Force
+# 0) نسخة احتياطية كاملة قبل أي شيء
+git bundle create "$env:USERPROFILE\almohanndes-history-backup-20261022.bundle" --all
+git bundle verify    "$env:USERPROFILE\almohanndes-history-backup-20261022.bundle"
 
-# 1) مستودع جديد فارغ على GitHub، ثم:
-Remove-Item -Recurse -Force .git
-git init -b main
-git add -A
-git commit -m "chore: fresh history (signing key rotated)"
-git remote add origin https://github.com/<user>/<new-repo>.git
-git push -u origin main
+# 1) حذف كل مسار فيه keystore من كل الكوميتات (5 مسارات: android/ + توقيع المهندس/ + احتفظ-بهذا-مجلد/)
+pip install git-filter-repo
+git filter-repo --invert-paths --path-glob '*keystore*' --force
+
+# 2) إعادة الربط ودفع قسري
+git remote add origin https://github.com/abualbakri0/al-mohandes.git
+git reflog expire --expire=now --all
+git gc --prune=now
+git push --force origin main
 ```
 
-**إن أردت الاحتفاظ بالتاريخ:** نفّذ 3.3 في `SECURITY.md` (`git filter-repo --invert-paths` ثم `push --force`).
-في الحالتين: بعد المسح لا تعمل `git pull` على أي نسخة قديمة — استخرج نسخة جديدة نظيفة.
+**نتيجة التحقق الفعلية:**
+
+| الفحص | النتيجة |
+|---|---|
+| شجرة HEAD قبل/بعد | متطابقة (`640f3e88`) — لا ملف تغيّر |
+| عدد الملفات | 246 قبل = 246 بعد |
+| عدد الكوميتات | 753 قبل = 753 بعد |
+| `git rev-list --objects --all \| Select-String keystore` | **0** |
+| `git log --all -- '*keystore*'` | لا سطر |
+| الكوميت القديم `e890b82` | `fatal: Not a valid object name` (اختفى) |
+| `git ls-remote origin` | `refs/heads/main = 1cd55f6` فقط |
+
+> **الاسترجاع لو احتجت التاريخ القديم:** `git clone "$env:USERPROFILE\almohanndes-history-backup-20261022.bundle" restore-here`
+> (النسخة تحتوي المفاتيح المسرَّبة — احذفها بعد التأكد التام، ولا ترفعها لأي مكان.)
+
+> **ملاحظة عن GitHub:** الكوميتات القديمة تبقى «معلّقة» على خوادم GitHub فترة قبل جمعها آلياً.
+> لا تُمنح صلاحية وصول (المستودع خاص)، والمفتاح القديم ميت أصلاً؛ فلا حاجة لإجراء إضافي.
+> لو أردت ضماناً مطلقاً: احذف المستودع وأنشئه من جديد وادفع `main` الحالي.
+
+> بعد المسح: أي نسخة قديمة عندك على جهاز آخر لن تستطيع `git pull` — استنسخ من جديد.
+
 
 ## 8) جدول التحقق النهائي
 
