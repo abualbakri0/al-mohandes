@@ -17,26 +17,20 @@
 --   الإشعارات في الواجهة ولا أي سياسة أمنية.
 -- ============================================================================
 
-DO $$
-DECLARE
-  t TEXT;
-BEGIN
-  -- مشغّلات INSERT القديمة (كانت من 20261017010000)
-  FOREACH t IN ARRAY ARRAY['notifications','lectures','assignments','exams','reference_materials','registrations']
-  LOOP
-    IF to_regclass('public.' || t) IS NOT NULL THEN
-      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'dispatch_push_' || t, t);
-    END IF;
-  END LOOP;
+-- مشغّلات INSERT القديمة (كانت من 20261017010000) — بأسمائها الدقيقة في قاعدة البيانات
+DROP TRIGGER IF EXISTS dispatch_push_notifications ON public.notifications;
+DROP TRIGGER IF EXISTS dispatch_push_lectures ON public.lectures;
+DROP TRIGGER IF EXISTS dispatch_push_assignments ON public.assignments;
+DROP TRIGGER IF EXISTS dispatch_push_exams ON public.exams;
+DROP TRIGGER IF EXISTS dispatch_push_references ON public.reference_materials;
+DROP TRIGGER IF EXISTS dispatch_push_registrations ON public.registrations;
 
-  -- مشغّلات UPDATE القديمة (كانت من 20261017020000)
-  FOREACH t IN ARRAY ARRAY['notifications','lectures','assignments','exams','reference_materials']
-  LOOP
-    IF to_regclass('public.' || t) IS NOT NULL THEN
-      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'dispatch_upd_push_' || t, t);
-    END IF;
-  END LOOP;
-END $$;
+-- مشغّلات UPDATE القديمة (كانت من 20261017020000) — بأسمائها الدقيقة في قاعدة البيانات
+DROP TRIGGER IF EXISTS dispatch_upd_push_notifications ON public.notifications;
+DROP TRIGGER IF EXISTS dispatch_upd_push_lectures ON public.lectures;
+DROP TRIGGER IF EXISTS dispatch_upd_push_assignments ON public.assignments;
+DROP TRIGGER IF EXISTS dispatch_upd_push_exams ON public.exams;
+DROP TRIGGER IF EXISTS dispatch_upd_push_references ON public.reference_materials;
 
 -- الدالة القديمة — لم يعد يستخدمها أي مشغّل بعد الآن.
 DROP FUNCTION IF EXISTS public.dispatch_background_push();
