@@ -123,6 +123,28 @@ BEGIN
   END IF;
 END $$;
 
+-- سحب صلاحية التنفيذ عن app_password_hash **دائماً** (سواء أُنشئت الآن أم كانت
+-- موجودة سابقاً في الإنتاج بلا تقييد): القياس أثبت أنها كانت تُستدعى من anon
+-- وتعيد الهاش. لا تحسب أي دالة عميل تحتاجها: كلها SECURITY DEFINER تعمل بصلاحية
+-- المالك، وسحب anon لا يمسّها. التنفيذ ديناميكي لأن وسائط النسخة الحيّة قد تكون
+-- varchar مثلاً، فيفشل REVOKE الثابت بـ«function does not exist».
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname IN ('app_password_hash', 'password_hash_make', 'password_hash_check')
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %I.%I(%s) FROM PUBLIC', r.nspname, r.proname, r.args);
+    EXECUTE format('REVOKE ALL ON FUNCTION %I.%I(%s) FROM anon, authenticated', r.nspname, r.proname, r.args);
+    RAISE NOTICE 'سُحبت صلاحية التنفيذ: %.%(%)', r.nspname, r.proname, r.args;
+  END LOOP;
+END $$;
+
 
 -- ---------------------------------------------------------------------------
 -- 4) تعويض DELETE/UPDATE بفلتر (ممنوع بعد إغلاق SELECT)
