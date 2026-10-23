@@ -57,7 +57,10 @@ android {
         // 31 = first build signed with the NEW keystore (rotated 2026-10-22).
         // Android refuses to update an app whose signature changed, so the
         // three current users must uninstall once before installing this build.
-        versionCode 31
+        // 32 = first build that unregisters devices through the new
+        //      SECURITY DEFINER RPCs (a filtered DELETE now needs SELECT, which
+        //      was revoked when the secret tables were locked down).
+        versionCode 32
         versionName "1.0"
         // Integrity pin consumed by MainActivity's signature check.
         buildConfigField "String", "APP_SIGNER_SHA256", "\"${signerSha256}\""
