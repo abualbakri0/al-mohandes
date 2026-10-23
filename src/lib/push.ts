@@ -82,6 +82,11 @@ export function unregisterPushToken(): void {
   const doomed = token;
   void (async () => {
     try {
+      // المسار الأول: RPC محصّن يعمل بعد إغلاق القراءة على الجدول
+      // (DELETE بفلتر يحتاج SELECT في PostgREST — وهو ممنوع الآن بقصد).
+      const rpc = await supabase.rpc('unregister_push_token', { p_token: doomed });
+      if (!rpc.error) return;
+      // احتياط لقاعدة لم تُحدَّث بعد (الدالة غير منشورة): الحذف المباشر.
       const { error } = await supabase.from('push_tokens').delete().eq('token', doomed);
       if (error) console.warn('[push] token delete failed', error.message);
     } catch (e) {

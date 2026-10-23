@@ -65,6 +65,10 @@ export function invalidateDeviceLinks(): void {
     const doomed = token;
     void (async () => {
       try {
+        // المسار الأول: RPC محصّن (يعمل بعد إغلاق SELECT على الجدول).
+        const rpc = await supabase.rpc('unregister_push_token', { p_token: doomed });
+        if (!rpc.error) return; // حُذف — انتهى
+        // DELETE المباشر (يعمل عندما تسمح سياسات RLS — قاعدة قديمة).
         const r = await supabase.from('push_tokens').delete().eq('token', doomed);
         if (!r.error) return; // حُذف — انتهى
         // DELETE مرفوض من السياسات → عطّل الصف بدل حذفه (نفس الأثر).
@@ -86,6 +90,9 @@ export function invalidateDeviceLinks(): void {
       const endpoint = sub?.endpoint;
       if (!endpoint) return;
       try { await sub?.unsubscribe(); } catch { /* ignore */ }
+      // RPC محصّن أولاً (الحذف بفلتر ممنوع بعد إغلاق SELECT).
+      const wrpc = await supabase.rpc('unregister_web_push', { p_endpoint: endpoint });
+      if (!wrpc.error) return;
       const r = await supabase.from('web_push_subscriptions').delete().eq('endpoint', endpoint);
       if (!r.error) return;
       const u = await supabase
