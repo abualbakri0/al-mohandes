@@ -56,3 +56,24 @@ node scripts/diagnose-login.mjs
 لا تُعِد منح `SELECT` على `registrations` للدور `anon` «لإصلاح» الحزمة القديمة — الحزمة
 القديمة ترسل رقم الهاتف كفلتر من العميل، فأي منح يعيد كشف أسماء وأرقام كل الطلاب
 (`401 42501` الحالي هو السلوك الصحيح). الإصلاح هو نشر الحزمة الجديدة فقط.
+
+## متطلبات البناء على أي منصّة (Node والتشويش)
+
+- **Node ≥ 22 إجباري:** `.npmrc` فيه `engine-strict=true` و`@capacitor/cli` يطلب `node >=22`،
+  فأي بناء بـNode 20 يفشل عند التثبيت برسالة `EBADENGINE`. هذا سبب فشل فحص GitHub
+  (`Security`) قبل 2026-10-24، وصار `node-version: 22` في `.github/workflows/security.yml`.
+- **التشويش يستهلك وقتاً وذاكرة:** `javascript-obfuscator` يضخّم الحزمة ×2.2
+  (589KB → ~1.28MB) ويستغرق 15–30 ثانية. مفاتيحه (في `vite.config.ts`) تُضبط كمتحوّلات
+  بيئة على المنصّة بلا تعديل كود:
+  - `OBFUSCATE=0` → بناء عادي بلا تشويش (أسرع؛ للتشخيص أو إن رفضت المنصّة البناء)
+  - `OBFUSCATE_STRICT=0` → فشل التشويش يصبح تحذيراً ويُشحن الأصل بدل إفشال النشر
+  - `OBFUSCATE_CFF=1` → flattening (أقوى/أبطأ) · `OBFUSCATE_SELFDEF=1` ممنوع على الويب (CSP)
+
+## عند فشل نشر Vercel
+
+1. `Deployments` → النشر الفاشل → `Build Logs`، واقرأ آخر 20 سطراً: السبب الحقيقي هناك
+   (رسالة GitHub «Deployment has failed» لا تحتويه).
+2. من الطرفية: `npx vercel login` ثم `npx vercel inspect <deployment-url> --logs`.
+3. أي مشروع Vercel مربوط بالمستودع ينشر عند **كل** `push`. المطلوب مشروع واحد فقط
+   (`al-mohandes-app-2026`)؛ افصل الباقي من `Settings` → `Git` → `Disconnect`.
+
