@@ -295,6 +295,14 @@ export const EXISTING_ACCOUNT_MESSAGE =
   'هذا الرقم مسجّل مسبقاً بكلمة مرور. سجّل الدخول، أو اطلب من المطوّر إعادة تعيين كلمة المرور.';
 
 /**
+ * لم نستطع سؤال الخادم عن حالة الرقم (شبكة/خدمة متعثّرة) — لا نُطلق أي ادّعاء
+ * عن وجود حساب أو عدمه: الطالب الجديد كان يرى «مسجّل مسبقاً» كذباً، والعائد كان
+ * يرى «لا يوجد حساب» كذباً، فيدور بين الشاشتين. نقول الحقيقة فقط.
+ */
+export const ACCOUNT_STATUS_UNKNOWN_MESSAGE =
+  'تعذّر التحقق من حالة هذا الرقم الآن. تأكد من اتصالك بالإنترنت ثم أعد المحاولة — لم يُنشأ أي حساب بعد.';
+
+/**
  * The server rejected a developer write with `developer grant required`
  * (RAISE … ERRCODE 42501 inside the security-definer RPCs). The browser still
  * looks like a developer, but the signed grant in localStorage is missing,
@@ -304,7 +312,7 @@ export const EXISTING_ACCOUNT_MESSAGE =
 export const DEV_GRANT_EXPIRED_MESSAGE =
   'انتهت صلاحية دخول المطوّر. اختر «خروج» ثم أدخل كلمة سر المطوّر من جديد، وبعدها أعد المحاولة.';
 
-type WriteErrorFacts = { offline: boolean; stale: boolean; duplicate: boolean; devGrant: boolean };
+type WriteErrorFacts = { offline: boolean; stale: boolean; duplicate: boolean; devGrant: boolean; statusUnknown: boolean };
 
 function writeErrorFacts(err: unknown): WriteErrorFacts {
   const e = (err ?? null) as { code?: string; message?: string; reason?: string } | null;
@@ -321,6 +329,7 @@ function writeErrorFacts(err: unknown): WriteErrorFacts {
       msg.includes('policy') ||
       msg.includes('jwt'),
     duplicate: code === '23505' || msg.includes('duplicate key') || reason === 'current_required',
+    statusUnknown: reason === 'status_unavailable',
   };
 }
 
@@ -338,6 +347,8 @@ export function describeWriteError(err: unknown, fallback = 'حدث خطأ غي�
 export function describeRegistrationError(err: unknown): string {
   const facts = writeErrorFacts(err);
   if (facts.offline) return OFFLINE_WRITE_MESSAGE;
+  // قبل `duplicate`: الحالة المجهولة ليست تكراراً — لا نقول «مسجّل مسبقاً» بلا دليل.
+  if (facts.statusUnknown) return ACCOUNT_STATUS_UNKNOWN_MESSAGE;
   if (facts.duplicate) return EXISTING_ACCOUNT_MESSAGE;
   if (facts.stale) return STALE_CLIENT_MESSAGE;
   return 'حدث خطأ أثناء التسجيل. حاول مرة أخرى.';
@@ -405,11 +416,26 @@ export async function addRegistration(name: string, phone: string, department?: 
   // the pending row was already inserted, leaving a phantom registration and the
   // generic "حدث خطأ أثناء التسجيل" message. Detect it first so the screen can
   // tell the student to sign in instead.
+  //
+  // لكن هذا الفحص fail-closed: أي تعثّر في `password_status` يعود بـ
+  // hasPassword=true احتياطاً، وكان ذلك يُظهر «هذا الرقم مسجّل مسبقاً بكلمة
+  // مرور» لطالب جديد تماماً — أي تناقض صريح مع «لا يوجد حساب» في شاشة الدخول.
+  // لذلك: (1) نعيد المحاولة مرة واحدة عند التعثّر، (2) لا نبني الرسالة القطعية
+  // إلا على إجابة مؤكَّدة من الخادم، (3) وإن بقي الحال مجهولاً نقول الحقيقة
+  // («تعذّر التحقق») بلا أي ادّعاء عن وجود حساب — ولا يُنشأ أي صفّ.
   if (password) {
-    const status = await fetchPasswordStatus(phone).catch(() => null);
-    if (status?.hasPassword) {
+    let status = await fetchPasswordStatus(phone).catch(() => null);
+    if (!status || !status.confirmed) {
+      status = await fetchPasswordStatus(phone).catch(() => null);
+    }
+    if (status?.hasPassword && status.confirmed) {
       const err = new Error('phone_already_has_password') as Error & { reason?: string };
       err.reason = 'current_required';
+      throw err;
+    }
+    if (!status || !status.confirmed) {
+      const err = new Error('password_status_unavailable') as Error & { reason?: string };
+      err.reason = 'status_unavailable';
       throw err;
     }
   }
@@ -601,6 +627,17 @@ type PasswordStatus = {
   mustChange: boolean;
   /** Legacy mode only — the stored hash (never fetched once the RPC exists). */
   hash: string | null;
+  /**
+   * هل الإجابة مؤكَّدة من الخادم؟
+   *
+   * false = تعذّر الوصول إلى `password_status` (شبكة/خادم)، و`hasPassword`
+   * حينها مجرد تقدير fail-closed (true احتياطاً). هذا التقدير صحيح كسلوك
+   * أمني (لا نسمح بالدخول بلا كلمة مرور)، لكنه **لا يصلح أساساً لرسالة
+   * قطعية** للطالب مثل «هذا الرقم مسجّل مسبقاً بكلمة مرور»؛ فطالب جديد تماماً
+   * كان يرى هذه الرسالة بسبب تعثّر نداء واحد. الشاشات تُميّز الآن بين
+   * «مؤكَّد» و«غير معروف».
+   */
+  confirmed: boolean;
 };
 
 async function fetchPasswordStatus(phone: string): Promise<PasswordStatus> {
@@ -614,15 +651,17 @@ async function fetchPasswordStatus(phone: string): Promise<PasswordStatus> {
         hasPassword: row ? Boolean(row.has_password) : false,
         mustChange: row ? Boolean(row.must_change) : false,
         hash: null,
+        confirmed: true,
       };
     }
     if (!isMissingRpc(error)) {
       // Transient failure — fail closed (password required) instead of
-      // dropping everyone into phone-only login.
-      return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null };
+      // dropping everyone into phone-only login. `confirmed: false` لأن هذه
+      // ليست إجابة الخادم بل احتياط أمني.
+      return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null, confirmed: false };
     }
   } catch {
-    return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null };
+    return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null, confirmed: false };
   }
 
   // 2) Pre-migration fallback: RPC not deployed → read status directly
@@ -643,6 +682,7 @@ async function fetchPasswordStatus(phone: string): Promise<PasswordStatus> {
         hasPassword: Boolean(row?.password_hash),
         mustChange: row ? Boolean(row.must_change_password) : false,
         hash: row?.password_hash ?? null,
+        confirmed: true,
       };
     }
     const msg = (error.message ?? '').toLowerCase();
@@ -655,12 +695,12 @@ async function fetchPasswordStatus(phone: string): Promise<PasswordStatus> {
     if (denied) {
       // SELECT already dropped while the RPC is also missing (partial
       // migration): phone-only — fail-safe, never a hash leak.
-      return { mode: 'none', hasPassword: false, mustChange: false, hash: null };
+      return { mode: 'none', hasPassword: false, mustChange: false, hash: null, confirmed: true };
     }
   } catch {
     /* fall through → fail closed */
   }
-  return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null };
+  return { mode: 'rpc', hasPassword: true, mustChange: false, hash: null, confirmed: false };
 }
 
 /**
