@@ -6,19 +6,34 @@
 
 ## 1) السبب الحقيقي (مقيس، لا مُستنتج)
 
-### أ) المطوّر لا يعتمد ولا يحذف
+### أ) المطوّر لا يعتمد ولا يحذف — السبب الدقيق: الصلاحية على **العمود `id`**
 
-`registrations` و`feedback_messages` و`app_settings` أُنشئت بملفات هجرة، فلم تصلها صلاحيات
-`UPDATE`/`DELETE`/`INSERT` التي تمنحها Supabase افتراضياً للجداول الجديدة.
-سياسات RLS الخاصة بالمطوّر موجودة، لكن **RLS لا تُفحص إذا كانت صلاحية الجدول نفسها غير ممنوحة**؛
-لذلك يرد PostgREST قبلها:
+الملاحظة الأولى كانت صحيحة جزئياً (صلاحيات `UPDATE`/`DELETE` ناقصة فعلاً)، لكنها **ليست السبب الكافي**.
+بعد إضافة تلك الصلاحيات بقي الفشل نفسه، والقياس الكامل كشف السبب الحقيقي:
 
 ```
-PATCH  /rest/v1/registrations  →  401 {"code":"42501","message":"permission denied for table registrations"}
-DELETE /rest/v1/registrations  →  401 42501
+PATCH  /rest/v1/registrations?id=eq.…  →  401
+{"code":"42501","message":"permission denied for table registrations",
+ "hint":"Grant the required privileges to the current role with:
+         GRANT SELECT ON public.registrations TO anon;"}
 ```
 
-ولهذا كان الزر يبدو كأنه «لا يفعل شيئاً» (كانت الواجهة تبتلع الخطأ صامتاً).
+في PostgreSQL، الأمر `UPDATE … WHERE id = $1` و`DELETE … WHERE id = $1` **يقرأ العمود
+المستخدم في شرط `WHERE`**، فيحتاج `SELECT` على ذلك العمود — لا `UPDATE`/`DELETE` فقط.
+وهجرة الخصوصية `20261023011000_lock_pii_reads.sql` سحبت `SELECT` كاملاً من `anon` على
+`registrations` و`feedback_messages` ⇒ كل اعتماد/حذف يفشل بـ`42501` **قبل** أن يُفحص RLS
+وقبل أن تُقرأ أي بيانات. ولهذا لم تُجدِ صلاحيات `UPDATE`/`DELETE` وحدها.
+
+**الإصلاح النهائي** — `supabase/migrations/20261023170000_registration_write_fix.sql`، ويعالج
+المشكلة من طريقين:
+
+| # | الطريقة | لماذا آمنة |
+| --- | --- | --- |
+| ① | `GRANT SELECT (id)` — صلاحية **عمودية** على عمود واحد فقط | سياسات `SELECT` على الجدولين أُسقطت في هجرة الخصوصية ⇒ `GET /registrations?select=id` يبقى 0 صفوف / `401`. لا أسماء ولا هواتف. وهذا يُصلح أيضاً أي نسخة قديمة (APK v31) على جهاز المطوّر |
+| ② | دالتان `SECURITY DEFINER`: `approve_registration(uuid)` و`delete_registration(uuid)` | تعملان بصلاحية مالك الجدول فلا تحتاجان أي `GRANT`، وتتحققان من توكين المطوّر بنفسهما وتردّان `developer grant required` صراحةً بدل نجاح صامت بصفر صفوف. التطبيق يستخدمهما أولاً |
+
+كما أن `delete_registration` تحذف مع الصف كلمة مروره في `user_passwords` ومفاتيح جلسته في
+`student_keys` — وإلا بقي الرقم «طالباً عائداً» يرفض التسجيل من جديد (`current_required`).
 
 ### ب) «حدث خطأ أثناء التسجيل» للطالب الجديد
 
@@ -34,23 +49,29 @@ DELETE /rest/v1/registrations  →  401 42501
 
 ## 2) الخطوة الوحيدة المطلوبة منك (SQL)
 
-افتح **Supabase Dashboard → SQL Editor**، والصق محتوى الملف كاملاً:
+> **مهم:** هذه هي الخطوة التي لم تُنفَّذ بعد. القياس الآن (2026-10-23) يقول صراحةً:
+> `registrations`/`feedback_messages` → `DENIED:table (42501)`، والدالتان
+> `approve_registration`/`delete_registration` **غير موجودتين**. أي أن الإصلاح جاهز في الكود
+> لكنه لم يصل إلى القاعدة.
+
+افتح **Supabase Dashboard → SQL Editor** (مشروع `wulycdwgvpriptzubazi`)، والصق محتوى هذا
+الملف كاملاً ثم **Run**:
 
 ```
-supabase/migrations/20261023160000_restore_dev_write_grants.sql
+supabase/migrations/20261023170000_registration_write_fix.sql
 ```
 
-ثم **Run**. الملف يقوم بأربعة أشياء:
+يفعل الملف:
 
-1. `GRANT UPDATE, DELETE` على `registrations` و`feedback_messages`.
-2. `GRANT UPDATE, INSERT` على `app_settings`.
-3. يُنشئ سياسات المطوّر الناقصة فقط (لا يلمس الموجود).
-4. **تحقق ذاتي**: إن بقيت صلاحية ناقصة سيفشل التنفيذ ويطبع اسمها — أي لا نجاح جزئي صامت.
+1. `GRANT SELECT (id)` على `registrations` و`feedback_messages` — وهذا هو **مفتاح الحل**:
+   شرط `WHERE id = …` لا يعمل بدونهما.
+2. `GRANT UPDATE, DELETE` على الجدولين، و`INSERT, UPDATE` على `app_settings`.
+3. يُنشئ `approve_registration(uuid)` و`delete_registration(uuid)` (SECURITY DEFINER).
+4. **تحقق ذاتي**: أي صلاحية ناقصة تُفشل التنفيذ وتُسمّى بالعربية — لا نجاح جزئي صامت.
+5. يؤكد أن `SELECT` الكامل ما زال مسحوباً (بيانات الطلاب غير مقروءة بالمفتاح العام).
 
-كما يُبقي `SELECT` مسحوباً (بيانات الطلاب تبقى غير مقروءة بالمفتاح العام)، ويحذف صفوف التشخيص
-التي أنشأها الفحص الآلي (رقم `700000000`).
-
-> بديل: `supabase db push` إن كنت تستخدم Supabase CLI. الملف idempotent — تنفيذه مرتين آمن.
+> لا تستخدم `20261023160000_restore_dev_write_grants.sql` — مُستبدل بهذا الملف (كان يمنح
+> `UPDATE`/`DELETE` دون `SELECT(id)` فلا يحل شيئاً). الملف الجديد idempotent: تنفيذه مرتين آمن.
 
 ---
 
@@ -66,7 +87,14 @@ node scripts/diagnose-grants.mjs
 table                  INSERT                 UPDATE                 DELETE
 registrations          ok (rejected by type)  ok (0 rows)            ok (0 rows)
 feedback_messages      ok (rejected by type)  ok (0 rows)            ok (0 rows)
-app_settings           ok (0 rows)            ok (0 rows)            ok (0 rows)
+app_settings           ok (rejected by type)  ok (0 rows)            ok (0 rows)
+
+developer write RPCs:
+  approve_registration     42501 {"message":"developer grant required"}   ← موجودة وتعمل
+  delete_registration      42501 {"message":"developer grant required"}   ← موجودة وتعمل
+
+privacy check (must stay 401 — no student data readable):
+  GET registrations          401
 ```
 
 ثم من التطبيق كمطوّر: «المسجلون» → اعتماد/حذف ⇒ ينجح فوراً (لا حاجة لإعادة نشر الويب).
@@ -88,6 +116,7 @@ node -e "const fs=require('fs');const e={};for(const l of fs.readFileSync('.env'
 | «هذه النسخة من التطبيق قديمة ولم تعد تملك صلاحية الكتابة…» | الطالب على حزمة قديمة/APK v31 | حدّث الصفحة (`Ctrl+Shift+R`) على الويب، أو ثبّت `Almohanndes-release-v32-signed.apk` |
 | «هذا الرقم مسجّل مسبقاً بكلمة مرور…» | الطالب عائد (حسابه يحمل كلمة مرور) | يسجّل الدخول، أو تُعيد له تعيين كلمة المرور من «المسجلون» |
 | «أنت غير متصل بالإنترنت…» | انقطاع شبكة فعلي | يعيد المحاولة بعد عودة الاتصال |
+| «انتهت صلاحية دخول المطوّر…» (في لوحة المطوّر) | التوكين الموقّع في `localStorage` مفقود أو انتهت مدته (30 يوماً) أو صادر بكلمة سر قديمة | «خروج» ثم إدخال كلمة سر المطوّر من جديد ⇒ يُصدر الخادم توكيناً جديداً وتنجح الكتابة فوراً |
 
 ---
 
@@ -95,8 +124,9 @@ node -e "const fs=require('fs');const e={};for(const l of fs.readFileSync('.env'
 
 | الملف | التغيير |
 | --- | --- |
-| `supabase/migrations/20261023160000_restore_dev_write_grants.sql` | الإصلاح الأساسي (جديد) |
-| `src/lib/api.ts` | `describeWriteError` / `describeRegistrationError` · `addRegistration` يفحص `password_status` قبل الإدراج فلا يُنشئ صفاً وهمياً · تمرير `reason` الحقيقي |
+| `supabase/migrations/20261023170000_registration_write_fix.sql` | **الإصلاح الفعلي (جديد)** — `GRANT SELECT (id)` + `UPDATE/DELETE` + الدالتان `approve_registration` / `delete_registration` |
+| `supabase/migrations/20261023160000_restore_dev_write_grants.sql` | مُستبدل (يبقى للأرشيف فقط — لا تنفّذه) |
+| `src/lib/api.ts` | `deleteRegistration` / `approveRegistration` تستخدمان الـRPC أولاً ثم الكتابة القديمة · `DEV_GRANT_EXPIRED_MESSAGE` لرفض التوكين · `describeWriteError` / `describeRegistrationError` · `addRegistration` يفحص `password_status` قبل الإدراج فلا يُنشئ صفاً وهمياً |
 | `src/components/RegistrationGate.tsx` · `RegistrationForm.tsx` | رسائل محدّدة بدل «حدث خطأ أثناء التسجيل» |
 | `src/components/RegistrationsView.tsx` | اعتماد/حذف/إعادة تعيين لم تعد تبتلع الأخطاء — إشعار بالسبب |
 | `scripts/diagnose-grants.mjs` · `diagnose-signup.mjs` · `diagnose-legacy-insert.mjs` | أدوات قياس دائمة |

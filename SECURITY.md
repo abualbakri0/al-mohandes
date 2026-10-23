@@ -387,24 +387,37 @@ node scripts/check-secrets.mjs    # يفشل إذا وُجد سرّ في ملف�
 
 كل ما يلي **مقيس فعلياً** بمفتاح `anon` (سكربتات `scripts/diagnose-*.mjs`)، لا مستنتجاً من قراءة الكود.
 
-### أ) المطوّر: صلاحية جدول ناقصة (خطأ في القاعدة)
+### أ) المطوّر: السبب الحقيقي = `SELECT` على العمود المستخدم في `WHERE`
 
 | العملية | قبل الإصلاح |
 | --- | --- |
 | `PATCH /rest/v1/registrations` (اعتماد) | ❌ `401 42501 permission denied for table registrations` |
 | `DELETE /rest/v1/registrations` (حذف) | ❌ `401 42501` |
 | `PATCH` / `DELETE /rest/v1/feedback_messages` | ❌ `401 42501` |
-| `INSERT` / `UPDATE /rest/v1/app_settings` | ❌ `401 42501` |
+| `DELETE /rest/v1/app_settings` | ❌ `401 42501` (غير مستخدم في التطبيق) |
 | `lectures` · `assignments` · `exams` · `reference_materials` · `study_tasks` · `notifications` | ✅ لا تغيير |
 
-السبب: `registrations` و`feedback_messages` و`app_settings` أُنشئت بملفات هجرة، فلم تصلها صلاحيات
-Supabase الافتراضية للجداول الجديدة. سياسات RLS للمطوّر كانت موجودة، لكن **RLS لا تُفحص أصلاً
-إذا لم تكن صلاحية الجدول (GRANT) ممنوحة** ⇒ يرد PostgREST قبل الوصول إلى السياسة.
-الإصلاح: `supabase/migrations/20261023160000_restore_dev_write_grants.sql`
-(`GRANT UPDATE, DELETE` + تأكيد بقاء `SELECT` مسحوباً + تحقق ذاتي يفشل إن نقص شيء).
+السبب: في PostgreSQL يحتاج `UPDATE … WHERE id = $1` و`DELETE … WHERE id = $1` صلاحية `SELECT`
+على العمود الذي يقرأه شرط `WHERE`. وبعد أن سحبت هجرة الخصوصية `20261023011000` صلاحية
+`SELECT` من `anon` على `registrations` و`feedback_messages`، صار كل اعتماد/حذف يفشل بـ`42501`
+**قبل** فحص RLS وقبل قراءة أي صف — ولهذا لم تُجدِ صلاحيات `UPDATE`/`DELETE` وحدها.
+(نقص صلاحيات `INSERT/UPDATE/DELETE` كان موجوداً أيضاً لأنهما جدولان أُنشئا بملفات هجرة،
+لكنه لم يكن السبب الكافي.)
+
+الإصلاح: `supabase/migrations/20261023170000_registration_write_fix.sql`
+
+1. `GRANT SELECT (id)` — صلاحية عمودية على عمود واحد. لا تكشف شيئاً: سياسات `SELECT` على
+   الجدولين أُسقطت في هجرة الخصوصية، فـ`GET /registrations?select=id` يبقى `0` صفوف/`401`.
+2. `GRANT UPDATE, DELETE` على الجدولين و`INSERT, UPDATE` على `app_settings` — بلا أثر بدون
+   توكين صالح، لأن كل سياسة مقيّدة بـ`dev_token_ok()`.
+3. دالتان `SECURITY DEFINER` (`approve_registration` / `delete_registration`) تتحققان من
+   التوكين بنفسهما وتردّان `developer grant required` صراحةً ⇒ لا «نجاح صامت بصفر صفوف»،
+   ولا اعتماد على صلاحيات الجداول إطلاقاً. التطبيق يستخدمهما أولاً.
+4. `delete_registration` تحذف مع الصف كلمة مروره (`user_passwords`) ومفاتيح جلسته
+   (`student_keys`) حتى لا يصبح الرقم «طالباً عائداً» يرفض التسجيل (`current_required`).
 
 > الواجهة كانت تُخفي هذا الخطأ (`catch {}`)، فيبدو الزر كأنه «لا يفعل شيئاً». صار الآن يُظهر
-> إشعاراً بلون الخطأ ورسالة محدّدة (`describeWriteError` في `src/lib/api.ts`).
+> إشعاراً بلون الخطأ ورسالة محدّدة (`describeWriteError` / `DEV_GRANT_EXPIRED_MESSAGE`).
 
 ### ب) التسجيل: الخادم سليم — الفشل من العميل
 

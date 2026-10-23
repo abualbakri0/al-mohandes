@@ -294,7 +294,17 @@ export const STALE_CLIENT_MESSAGE =
 export const EXISTING_ACCOUNT_MESSAGE =
   'هذا الرقم مسجّل مسبقاً بكلمة مرور. سجّل الدخول، أو اطلب من المطوّر إعادة تعيين كلمة المرور.';
 
-type WriteErrorFacts = { offline: boolean; stale: boolean; duplicate: boolean };
+/**
+ * The server rejected a developer write with `developer grant required`
+ * (RAISE … ERRCODE 42501 inside the security-definer RPCs). The browser still
+ * looks like a developer, but the signed grant in localStorage is missing,
+ * expired (30 days) or was issued by an older code — only re-entering the
+ * developer password mints a fresh one.
+ */
+export const DEV_GRANT_EXPIRED_MESSAGE =
+  'انتهت صلاحية دخول المطوّر. اختر «خروج» ثم أدخل كلمة سر المطوّر من جديد، وبعدها أعد المحاولة.';
+
+type WriteErrorFacts = { offline: boolean; stale: boolean; duplicate: boolean; devGrant: boolean };
 
 function writeErrorFacts(err: unknown): WriteErrorFacts {
   const e = (err ?? null) as { code?: string; message?: string; reason?: string } | null;
@@ -303,6 +313,7 @@ function writeErrorFacts(err: unknown): WriteErrorFacts {
   const reason = e?.reason ?? '';
   return {
     offline: /fetch|network|failed to fetch|timeout|abort/i.test(msg),
+    devGrant: msg.includes('developer grant required'),
     stale:
       code === '42501' ||
       msg.includes('permission denied') ||
@@ -317,6 +328,8 @@ function writeErrorFacts(err: unknown): WriteErrorFacts {
 export function describeWriteError(err: unknown, fallback = 'حدث خطأ غير متوقع. حاول مرة أخرى.'): string {
   const facts = writeErrorFacts(err);
   if (facts.offline) return OFFLINE_WRITE_MESSAGE;
+  // Checked before `stale`: the grant rejection also carries code 42501.
+  if (facts.devGrant) return DEV_GRANT_EXPIRED_MESSAGE;
   if (facts.stale) return STALE_CLIENT_MESSAGE;
   return fallback;
 }
@@ -421,12 +434,39 @@ export async function addRegistration(name: string, phone: string, department?: 
   return data;
 }
 
+/**
+ * Developer-only writes on `registrations`.
+ *
+ * Measured root cause (2026-10-23, anon key, dummy rows):
+ *   PATCH /rest/v1/registrations?id=eq.…  → 401 42501
+ *   "permission denied for table registrations"
+ * because `UPDATE/DELETE … WHERE id = $1` reads the `id` column and the privacy
+ * migration revoked SELECT on that table entirely. PostgREST rejects the call
+ * before RLS is even evaluated, so the developer policies never ran.
+ *
+ * Migration 20261023170000 fixes it twice over: it grants `SELECT (id)` (the
+ * minimum the WHERE clause needs — rows stay invisible, RLS has no SELECT
+ * policy on these tables) and adds the security-definer RPCs used here.
+ *
+ * The RPC is tried first: it runs as the table owner, needs no table privilege
+ * and answers `developer grant required` (→ DEV_GRANT_EXPIRED_MESSAGE) instead
+ * of silently doing nothing. The legacy table write is kept only for backends
+ * where that migration has not been applied yet.
+ */
 export async function deleteRegistration(id: string): Promise<void> {
+  const rpc = await supabase.rpc('delete_registration', { p_id: id });
+  if (!rpc.error) return;
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   const { error } = await supabase.from('registrations').delete().eq('id', id);
   if (error) throw error;
 }
 
 export async function approveRegistration(id: string): Promise<void> {
+  const rpc = await supabase.rpc('approve_registration', { p_id: id });
+  if (!rpc.error) return;
+  if (!isMissingRpc(rpc.error)) throw rpc.error;
+
   const { error } = await supabase
     .from('registrations')
     .update({ is_approved: true })
