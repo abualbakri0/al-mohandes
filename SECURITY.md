@@ -290,6 +290,7 @@ git push --force origin main
 | `POST rpc/password_status {"p_phone":"…"}` | ✅ `200 {"must_change":false,"has_password":false}` |
 | `POST rpc/verify_password` (بيانات خاطئة) | ✅ `200 false` |
 | `app_password_hash('a','b')` من anon | ❌ كان `200` ويعيد `78f0be89…` = `SHA-256("a::b")` بالضبط ⇒ **الصيغة مؤكَّدة، لكن الدالة كانت مناحة للعميل** |
+| `app_password_hash('779809243','test1234')` من anon — **إعادة قياس 2026-10-23 04:05** | ❌ ما زال `200` ويعيد `ce3c26c7…` ⇒ **الملف ① لم يُعَد تشغيله بعد**، والسحب المضافة في `db5850c` غير مطبَّق على القاعدة الحيّة |
 | `password_hash_make` / `password_hash_check` من anon | ✅ `404 PGRST202` (غير مكشوفة للدور) |
 
 **الثغرة التي كشفها القياس:** الـ`REVOKE` على `app_password_hash` كان **داخل** فرع
@@ -298,6 +299,25 @@ git push --force origin main
 نسخة موجودة **دائماً** (ديناميكياً بـ`pg_get_function_identity_arguments`، فلا تفشل
 إن اختلفت أنواع الوسائط). لا يكسر شيئاً: كل دوال كلمة المرور `SECURITY DEFINER`
 تعمل بصلاحية المالك. **⇒ أعد تشغيل الملف ① (idempotent) لتطبيق السحب.**
+
+**أثر جانبي وظيفي مقيس (2026-10-23) — دخول المتصفّح يفشل:** نسخة الويب المنشورة على
+`al-mohandes-app-2026.vercel.app` **أقدم من الإغلاق**: الحزمة المخدومة
+`assets/index-7ZDyTk2W.js` (575,076 حرفاً) لا تحوي `registration_by_phone` ولا
+`register_student`، فشاشة الدخول فيها ما زالت تقرأ `registrations` مباشرةً ⇒
+`401 42501 permission denied` ⇒ الرسالة العامة «تعذّر التحقق. تأكد من اتصال الإنترنت»
+(الشبكة سليمة؛ الخطأ صلاحية لا اتصال).
+
+| الفحص (مفتاح anon، حي) | القياس |
+|---|---|
+| `rpc/registration_by_phone {p_phone}` | ✅ `200` ويعيد صف الطالب |
+| `rest/registrations?phone=eq.…` | ✅ `401` + `42501` — الإغلاق يعمل كما صُمِّم |
+| الحزمة المحلية `assets/index-Dm6GTvo_.js` | ✅ تحوي `registration_by_phone` + `register_student` + `unregister_push_token` |
+| الحزمة المنشورة `assets/index-7ZDyTk2W.js` | ❌ لا تحوي أياً منها ⇒ **نشر قديم** |
+
+**الإصلاح:** أعد نشر `dist` (أو ثبّت APK v32 الذي يحمل الحزمة الجديدة). إعادة النشر
+لا تُعيد أي ثغرة — الحزمة الجديدة تستخدم RPC بدل القراءة المباشرة. الـ`sw.js` يعمل
+network-first لطلبات التنقّل، فتكفي إعادة تحميل واحدة بعد النشر. التشخيص المتكرِّر
+(قراءة فقط): `node scripts/diagnose-login.mjs [phone] [webUrl]`.
 
 **التحقّق الكامل (للقراءة فقط، دور postgres):** `supabase/checks/verify_password_migrations.sql`
 — أربعة جداول: توقيعات الدوال وصلاحياتها · جاهزية bcrypt وعدد الهاشات القديمة/الجديدة
