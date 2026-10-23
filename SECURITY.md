@@ -365,8 +365,8 @@ node scripts/check-secrets.mjs    # يفشل إذا وُجد سرّ في ملف�
 | 1 | المفتاح العام (`anon`) مضمَّن في التطبيق | قراءة كل المحتوى | طبيعي في تصميم Supabase بلا تسجيل دخول |
 | 2 | ~~رقم هاتف الطلاب مقروء للجميع في `registrations`~~ → **أُغلق** بنسبة كبيرة في 3.1.3 | — | المتبقي: `registration_by_phone` يخبرك باسم صاحب الرقم إن كان مسجلاً — «أداة تحقّق» تحتاج معرفة الرقم مسبقاً. يمكن تخفيفها لاحقاً بإرجاع `exists` فقط للدخول + طلب الاسم من جلسة المستخدم |
 | 3 | ~~كلمة المرور = SHA-256(phone::password) بلا bcrypt~~ → **نُفِّذ** في 3.6 (`20261023150000_password_bcrypt.sql`) — التأكيد النهائي بـ`supabase/checks/verify_password_migrations.sql` | — | أرسل ناتج سكربت التحقّق؛ الهاش القديم يُرقّى تلقائياً في أول دخول ناجح |
-| 4 | لا يوجد Play Integrity / SSL pinning | تشغيل على جهاز معدّل | Play Integrity + شهادة مثبَّتة |
-| 5 | الحزمة الويب مقلَّصة (esbuild) فقط | قراءة الكود | `javascript-obfuscator` عند البناء (يحتاج اختبار) |
+| 4 | ~~لا يوجد Play Integrity~~ → **تثبيت بصمة التوقيع مُنفَّذ** (`MainActivity` + `BuildConfig.APP_SIGNER_SHA256`)؛ Play Integrity: خطة مرحلية جاهزة في `docs/PLAY-INTEGRITY-PLAN.md` | تشغيل على جهاز معدّل / إعادة توقيع | نفّذ المرحلتين 1 ثم 2 من الخطة |
+| 5 | ~~الحزمة الويب مقلَّصة (esbuild) فقط~~ → ✅ **أُغلق** 2026-10-23: تشويش عبر Vite (`build/vite-plugin-obfuscator.ts`) — داخل الـAPK: 0 ظهور لعنوان المشروع/أسماء RPC/الأسرار (قياس فعلي) | قراءة الكود | لا شيء متبقٍ يُذكر: مفاتيح JSON (`is_developer`, `alerts_enabled`) تُرى في الشبكة أصلاً |
 | 6 | ~~`push_tokens` مفتوح للكتابة **والقراءة**~~ → ✅ **أُغلق** في 3.5: `GET` → `401`، و`DELETE`/`UPDATE` بفلتر → `401` (لا يعطّل أحد إشعارات غيره) | — | لا شيء متبقٍ (الكتابة للتسجيل فقط) |
 | 7 | حساب في حالة «يجب تغيير كلمة المرور» يقبل تعيين كلمة مرور جديدة بلا كلمة حالية | اختطاف خلال نافذة قصيرة بعد إعادة تعيين المطوّر | يُغلق نهائياً بإصدار «جلسة تغيير» قصيرة العمر بعد `verify_password` |
 | 8 | ~~`user_passwords.password_hash` مقروء بالمفتاح العام~~ → ✅ **أُغلق** في 3.5 (`GET` → `401`) · التجزئة السريعة تُصلَب في 3.6 (bcrypt) | — | نفّذ 3.6 لتحويل الهاش |
@@ -445,4 +445,56 @@ node scripts/diagnose-signup.mjs          # تسجيل كامل برقم وهم�
 node scripts/diagnose-legacy-insert.mjs   # إثبات فشل العميل القديم (42501) + بصمة الحزمة المخدومة
 node scripts/diagnose-grants.mjs          # مصفوفة صلاحيات INSERT/UPDATE/DELETE لكل جدول
 ```
+
+---
+
+## 7. نظام الإشعارات: إغلاق ثغرتي N1 و N2 (2026-10-24)
+
+### أ) المقاس قبل الإصلاح (2026-10-23)
+
+| القياس | النتيجة | الأثر |
+|---|---|---|
+| `POST /functions/v1/push-notify` بجسم `{}` بمفتاح anon | `200` | **لا فحص سرّ إطلاقاً** (`WEBHOOK_SECRET` غير مضبوط ⇒ الفحص داخل `if` لم يُنفَّذ). أي شخص يملك المفتاح العام يستطيع إرسال إشعار لكل الأجهزة |
+| `POST /rest/v1/rpc/register_push_token {"p_is_developer":true}` | `204` | جهاز مجهول يصبح «مطوّراً» فيستقبل كل تسجيل جديد: **الاسم + الهاتف** |
+
+### ب) الإصلاح
+
+1. حارس واحد على مستوى القاعدة `public.push_guard_dev_flag` (BEFORE INSERT OR UPDATE) على `push_tokens` و`web_push_subscriptions`: يُسقط `is_developer` ما لم يكن `x-dev-token` صالحاً عبر `dev_token_ok()` — يغلق المسارات الثلاثة (دالة الحافة / RPC / PostgREST) وأي مسار مستقبلي.
+2. `public.push_webhook_secret()`: مصدر السرّ الوحيد هو Vault، ممنوح لـ `service_role` فقط؛ ودالة الحافة ترفض (503) عند غيابه (fail-closed) مع مقارنة بزمن ثابت.
+3. تدوير السرّ المسرَّب (كان مكتوباً حرفياً في الكود) إلى قيمة عشوائية 32 بايت داخل Vault — **داخل نفس ملف الهجرة** ليكون الترتيب آمناً بأي حال، ولألا يمسّ سرّاً سليماً عند إعادة التنفيذ.
+4. العميل يرسل `dev_token` فقط، ولا يرسل `is_developer` إلى دالة الحافة.
+5. تشخيص بلا كشف: `push_security_status()` (عدّادات + تحذيرات عربية) و`push_device_status(token)` (ثلاثة أعلام لجهاز صاحب التوكن)، وبطاقة «حالة الإشعارات» في إعدادات الطالب والمطوّر تعرض سبب عدم وصول الإشعارات وتُصلحه بضغطة.
+
+### ج) الملفات
+
+```
+supabase/migrations/20261024090000_push_notifications_hardening.sql   # الدالة + التدوير + الحارس + التشخيص
+supabase/functions/push-notify/index.ts      # قراءة السرّ من Vault + fail-closed + عدم الثقة بالعميل
+src/lib/push.ts · src/lib/webPush.ts         # dev_token بدل is_developer + getPushDeviceStatus/repairPush
+src/components/PushStatusCard.tsx            # بطاقة «حالة الإشعارات» (طالب + مطوّر)
+PUSH-SECURITY-FIX.md                          # ترتيب النشر + اختبارات القبول + التراجع
+```
+
+> **الخطوة المتبقّية عليك:** تنفيذ ترتيب النشر في `PUSH-SECURITY-FIX.md` (SQL ← نشر الدالة ← APK v34). الترتيب صار آمناً في الاتجاهين، لكن نشر الدالة قبل الهجرة يعني `503` (فشل مغلق) حتى تُنفَّذ الهجرة.
+
+
+
+## 8. حماية الكود من الهندسة العكسية (2026-10-23)
+
+طبقات مُنفَّذة ومقيسة — التفاصيل الكاملة والقياسات في
+`docs/ANTI-REVERSE-ENGINEERING.md`:
+
+| الطبقة | الأداة | الحالة |
+|---|---|---|
+| 1 | تشويش حزمة JS داخل الـAPK (`build/vite-plugin-obfuscator.ts`) | ✅ — 0 ظهور لأي نص حسّاس داخل `app-release.apk` |
+| 2 | R8/ProGuard: `-repackageclasses ''` + قواعد FCM صريحة + `-keep` مُولّدة من `capacitor.plugins.json` | ✅ — `BUILD SUCCESSFUL`, `mapping.txt` بأسماء بلا معنى |
+| 3 | تثبيت بصمة شهادة التوقيع في `MainActivity` | ✅ (مُنفّذ سابقاً) |
+| 4 | Play Integrity + بوّابة RLS | ⏳ خطة جاهزة للتنفيذ المرحلي: `docs/PLAY-INTEGRITY-PLAN.md` |
+
+**تشغيل البناء المحمي:** `npm run build` (مشوّش افتراضياً).
+**تشخيص بلا تشويش:** `npm run build:nobf`.
+**فحص تلقائي للربط بين القطع:** `node scripts/check-chunk-bindings.mjs`.
+
+> ⚠️ **ما لا تحميه أي طبقة مما سبق:** `VITE_SUPABASE_URL` والمفتاح العام موجودان
+> في الحزمة ويرسلهما العميل في كل طلب — حمايتهما = RLS فقط (القسم 1 و3).
 

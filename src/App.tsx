@@ -766,7 +766,7 @@ function App() {
       {showBanner && nightAlert && (
         <NightAlertBanner
           alert={nightAlert}
-          userName={nameParts.length > 1 ? `${firstName} ${lastName}` : firstName}
+          userName={displayName}
           onClose={() => setBannerDismissed(true)}
         />
       )}

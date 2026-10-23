@@ -15,7 +15,9 @@ import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase, type Department } from '@/lib/supabase';
 import { getNotificationPrefs } from '@/lib/notificationPrefs';
+import { getDevToken } from '@/lib/devAuth';
 import { CHANNEL_UPDATES, CHANNEL_ALERTS } from '@/lib/nativeNotifications';
+import { initWebPush } from '@/lib/webPush';
 import { emitOfficialEvent, markSeen, type ToastFn } from '@/lib/officialEmit';
 import { consumeSelfWrite } from '@/lib/api';
 import type { TabId } from '@/components/Navbar';
@@ -161,7 +163,6 @@ async function uploadPushToken(): Promise<void> {
   const payload = {
     token,
     department,
-    is_developer: isDeveloperDevice,
     platform: 'android',
     alerts_enabled: alertsEnabled,
     last_seen_at: new Date().toISOString(),
@@ -177,7 +178,9 @@ async function uploadPushToken(): Promise<void> {
         token,
         platform: 'android',
         department,
-        is_developer: isDeveloperDevice,
+        // N2: لا نُرسل is_developer من العميل (كان يُصدَّق ويكشف بيانات
+        // الطلاب). نُرسل توكين المطوّر فقط، والقاعدة تقرّر الصفة بنفسها.
+        dev_token: getDevToken() ?? undefined,
         alerts_enabled: alertsEnabled,
       },
     });
@@ -224,7 +227,7 @@ async function uploadPushToken(): Promise<void> {
 
     const upd = await supabase
       .from('push_tokens')
-      .update({ department, is_developer: isDeveloperDevice, alerts_enabled: alertsEnabled, last_seen_at: payload.last_seen_at })
+      .update({ department, alerts_enabled: alertsEnabled, last_seen_at: payload.last_seen_at })
       .eq('token', token);
     if (!upd.error) {
       tokenUploaded(token);
@@ -262,6 +265,97 @@ export function flushPushRegistration(): void {
     uploadRetryTimer = null;
   }
   void uploadPushToken();
+}
+
+// ============================================================
+// حالة الإشعارات على هذا الجهاز (شاشة الإعدادات)
+// ============================================================
+// لماذا نحتاجها؟ أشهر سبب لظهور النظام «ميتاً» لا يُرى من السيرفر إطلاقاً:
+// صلاحية إشعارات مرفوضة على مستوى النظام، أو صف جهاز غير مسجَّل، أو تنبيهات
+// محتوى موقوفة. FCM يقبل الإرسال (HTTP 200) بينما أندرويد يُسقط العرض بصمت،
+// فيظن المطوّر أن الخلل في السيرفر. هذه الدالة تجعل الحقيقة مرئية وتُصلحها.
+export type PushDeviceStatus = {
+  /** صلاحية الإشعارات على مستوى النظام (أندرويد 13+ / المتصفح). */
+  permission: 'granted' | 'denied' | 'prompt' | 'unsupported';
+  /** التوكن المحفوظ على الجهاز — null = النظام لم يُصدره بعد. */
+  token: string | null;
+  /** هل صف هذا الجهاز موجود على السيرفر. */
+  registered: boolean;
+  /** هل تنبيهات المحتوى مفعّلة لهذا الجهاز على السيرفر. */
+  alertsEnabled: boolean;
+  /** هل يعتبر السيرفر هذا الجهاز «جهاز مطوّر» (يقرّره السيرفر من التوكن). */
+  isDeveloperDevice: boolean;
+  /** هل استجاب السيرفر (false = الهجرة غير منفَّذة بعد أو لا شبكة). */
+  serverReachable: boolean;
+};
+
+async function readPushPermission(): Promise<PushDeviceStatus['permission']> {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const res = await PushNotifications.checkPermissions();
+      if (res.receive === 'granted') return 'granted';
+      if (res.receive === 'denied') return 'denied';
+      return 'prompt';
+    } catch {
+      return 'unsupported';
+    }
+  }
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    const p = window.Notification.permission;
+    return p === 'granted' ? 'granted' : p === 'denied' ? 'denied' : 'prompt';
+  }
+  return 'unsupported';
+}
+
+/** يقرأ الحالة الحقيقية: صلاحية النظام + التوكن + صف السيرفر. لا يرمي أبداً. */
+export async function getPushDeviceStatus(): Promise<PushDeviceStatus> {
+  const status: PushDeviceStatus = {
+    permission: await readPushPermission(),
+    token: getStoredPushToken(),
+    registered: false,
+    alertsEnabled: false,
+    isDeveloperDevice: false,
+    serverReachable: false,
+  };
+  if (!status.token) return status;
+
+  try {
+    const { data, error } = await supabase.rpc('push_device_status', { p_token: status.token });
+    // PGRST202 = الدالة غير منفَّذة بعد (هجرة 20261024090000).
+    if (error || !data) return status;
+    const row = data as { registered?: boolean; alerts_enabled?: boolean; is_developer?: boolean };
+    return {
+      ...status,
+      registered: row.registered === true,
+      alertsEnabled: row.alerts_enabled === true,
+      isDeveloperDevice: row.is_developer === true,
+      serverReachable: true,
+    };
+  } catch {
+    return status;
+  }
+}
+
+/**
+ * إصلاح بضغطة واحدة: يطلب الصلاحية، يعيد تسجيل التوكن، ويُعيد رفع الصف
+ * (فيعيد alerts_enabled=true لجهاز أوقفه حارس الحساب المحذوف سابقاً).
+ * لا يرمي أبداً — يُرجع الحالة بعد المحاولة.
+ */
+export async function repairPush(): Promise<PushDeviceStatus> {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      await PushNotifications.requestPermissions();
+      await PushNotifications.register();
+    } else {
+      await initWebPush();
+    }
+  } catch (e) {
+    console.warn('[push] repair attempt failed', e);
+  }
+  await uploadPushToken();
+  // مهلة قصيرة: النظام قد يُصدر التوكن الآن، والكتابة تحتاج رحلة شبكة.
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return getPushDeviceStatus();
 }
 
 /**

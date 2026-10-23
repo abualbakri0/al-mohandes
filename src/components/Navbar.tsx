@@ -102,6 +102,13 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
   const visibleItems = NAV_ITEMS.filter((item) => !item.devOnly || isDeveloper);
   const deptLabel = userDepartment === 'ميكاترونكس' ? 'هندسة الميكاترونكس' : userDepartment === 'كهربائية' ? 'هندسة كهرباء' : null;
 
+  // اسم المستخدم المعروض: الأول + الثاني + الأخير (نفس منطق displayName في App.tsx).
+  // مثال: «محمد علي حسن أحمد» ← «محمد علي أحمد».
+  const nameParts = userName.trim().split(/\s+/).filter(Boolean);
+  const displayName = [...nameParts.slice(0, 2), ...(nameParts.length > 2 ? [nameParts[nameParts.length - 1]] : [])].join(' ');
+  // إن كان للاسم أكثر من ثلاثة مقاطع (أسماء وسطى محذوفة) نُظهر الاسم كاملاً بسطر صغير.
+  const hasExtraMiddleNames = nameParts.length > 3;
+
   return (
     <header className="sticky top-0 z-50 pt-[calc(env(safe-area-inset-top,0px))] px-[calc(1rem+env(safe-area-inset-left,0px))] sm:px-[calc(1.5rem+env(safe-area-inset-left,0px))] bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 shadow-sm transition-colors duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -210,14 +217,16 @@ export default function Navbar({ activeTab, onTabChange, notificationCount, regi
               }`}>
                 {userName.charAt(0)}
               </div>
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <p className="text-xs text-slate-500 dark:text-slate-400">المستخدم</p>
                 <div>
                   <p className={`font-semibold flex items-center gap-1 ${isDeveloper ? 'text-amber-700 dark:text-amber-400' : 'text-teal-700 dark:text-teal-400'}`}>
-                    <UserIcon className="w-3.5 h-3.5" />
-                    {userName.split(/\s+/)[0]}
+                    <UserIcon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{displayName}</span>
                   </p>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-tight">{userName}</p>
+                  {hasExtraMiddleNames && (
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-tight truncate">{userName}</p>
+                  )}
                   {isDeveloper ? (
                     <p className="text-[10px] text-amber-500 dark:text-amber-500 font-medium flex items-center gap-0.5 mt-0.5">
                       <Shield className="w-2.5 h-2.5" /> مطور

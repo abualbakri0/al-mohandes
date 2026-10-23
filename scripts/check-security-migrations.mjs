@@ -45,6 +45,10 @@ await rpc('rpc unregister_push_token (وسيط فارغ)', 'unregister_push_toke
 // 3) مسار كلمة المرور الحيّ ما زال يعمل
 await rpc('rpc password_status', 'password_status', { p_phone: '__probe__' }, '200');
 await rpc('rpc verify_password (بيانات خاطئة)', 'verify_password', { p_phone: '__probe__', p_password: 'x' }, '200');
+//    20261024120000: قراءة حالة حدّ المحاولات (تفصل «كلمة خطأ» عن «أوقفت المحاولات»)
+await rpc('rpc password_login_blocked', 'password_login_blocked', { p_phone: '__probe__' }, '200');
+//    ونفس الهجرة: حارس المدخلات في register_student ما زال يرفض البيانات الفارغة
+await rpc('rpc register_student (بيانات فارغة → 22023)', 'register_student', { p_name: '', p_phone: '' }, '400');
 
 // 4) دوال التجزئة يجب ألا تكون مناحة لـanon
 //    404 = غير مكشوفة أصلاً (مخفية عن الدور) · 401/403 = موجودة ومحبوسة. كلاهما مقبول.

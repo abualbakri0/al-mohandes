@@ -1,86 +1,105 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# ============================================================================
+#  R8 / ProGuard — تشويش وتقليص كود أندرويد الأصلي (release)
+# ============================================================================
+# ملاحظة مهمة: هذا الملف يحمي **كود Java/Kotlin** فقط. حزمة الويب (JS) داخل
+# assets/public لا يمسّها R8 — تشويشها يتم في Vite (build/vite-plugin-obfuscator.ts).
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# الملفات المرجعية من Gradle (تُولَّد تلقائياً، لا تُحرَّر):
+#   app/build/generated/r8-rules/capacitor-plugins-keep.pro
+#   (مُشتقّة من assets/capacitor.plugins.json — تمنع R8 من إعادة تسمية أي
+#    بلجن يُنشأ بالانعكاس عبر Class.forName)
+# ============================================================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- سمات عامة يجب إبقاؤها ------------------------------------------------
+# Annotations/Signature/InnerClasses: تعتمد عليها مكتبات الانعكاس (Firebase,
+# Gson, AndroidX). حذفها يسبب أعطالاً وقت التشغيل لا وقت البناء.
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-keepattributes SourceFile,LineNumberTable
+# إخفاء اسم ملف المصدر في آثار الأعطال (يبقى السطر فقط).
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
-
-# ============================================================
-# Capacitor core protection rules
-# ============================================================
-
-# Keep Capacitor plugin annotations and bridge classes
+# --- Capacitor ------------------------------------------------------------
 -keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }
 -keep class com.getcapacitor.** { *; }
 -keep public class * extends com.getcapacitor.Plugin { *; }
-
-# Keep native methods (JNI)
--keepclasseswithmembernames class * {
-    native <methods>;
+-keep class com.getcapacitor.Bridge { *; }
+-keep class com.getcapacitor.JSExport { *; }
+# الجسر يستدعي @PluginMethod/@JavascriptInterface بالاسم نصياً.
+-keepclassmembers class * {
+    @com.getcapacitor.PluginMethod <methods>;
 }
-
-# Keep classes with @JavascriptInterface annotation (WebView bridge)
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
-
-# Keep Capacitor Bridge / MessageHandler / PluginCall runtime reflection targets
--keep class com.getcapacitor.Bridge { *; }
--keep class com.getcapacitor.JSExport { *; }
-
-# Keep Cordova plugin classes (from capacitor-cordova-android-plugins)
+# بلجنات Cordova (حزمة capacitor-cordova-android-plugins)
 -keep class org.apache.cordova.** { *; }
 
-# Keep Parcelable implementations
+# --- Firebase / FCM (الإشعارات) -------------------------------------------
+# خدمات FCM تُنشئ خدمتك بالانعكاس من البيان، وتستدعي onNewToken/onMessageReceived
+# بالاسم. تقليصها = إشعارات صامتة بلا أي خطأ بناء.
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+-keep class * extends com.google.firebase.messaging.FirebaseMessagingService { *; }
+-keep class * extends com.google.firebase.messaging.FirebaseMessagingReceiver { *; }
+-keepclassmembers class * extends com.google.firebase.messaging.FirebaseMessagingService {
+    public void onNewToken(java.lang.String);
+    public void onMessageReceived(com.google.firebase.messaging.RemoteMessage);
+}
+-dontwarn com.google.firebase.**
+-dontwarn com.google.android.gms.**
+
+# --- JNI / Parcelable / Enums --------------------------------------------
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
 -keepclassmembers class * implements android.os.Parcelable {
     public static final ** CREATOR;
 }
-
-# Keep enums (used by Capacitor config)
 -keepclassmembers enum * {
     public static **[] values();
     public static ** valueOf(java.lang.String);
 }
-
-# Keep JavaScript interface used by the app if any
--keepclassmembers class com.almohanndes.app.** {
-    @android.webkit.JavascriptInterface <methods>;
+-keepclassmembers class * {
+    @androidx.annotation.Keep <methods>;
+}
+-keepclassmembers class * {
+    @androidx.annotation.Keep <fields>;
 }
 
-# Obfuscation: rename source file and keep line info for readable crash reports
--keepattributes SourceFile,LineNumberTable
--renamesourcefileattribute SourceFile
-
-# ============================================================
-# Harder-to-reverse obfuscation (release only)
-# ============================================================
-# Move all classes into a single flat package so package structure leaks nothing
--repackageclasses ''
-# Allow method/field visibility changes → more aggressive optimization
--allowaccessmodification
-
-
-
-# ============================================================
-# Release hardening (in-place): strip logs + aggressive overload
-# ============================================================
--assumenosideeffects class android.util.Log { public static *** d(...); public static *** v(...); public static *** i(...); public static *** w(...); public static *** e(...); }
--assumenosideeffects class java.io.PrintStream { public void println(...); }
--overloadaggressively
+# --- تطبيقنا --------------------------------------------------------------
+# MainActivity يُنشأ من البيان بالاسم؛ BuildConfig يحمل بصمة التوقيع المرجعية.
 -keep class com.almohanndes.app.MainActivity { *; }
 -keep class com.almohanndes.app.BuildConfig { *; }
+
+# --- تنظيف السجلات --------------------------------------------------------
+-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+    public static *** v(...);
+    public static *** i(...);
+    public static *** w(...);
+    public static *** e(...);
+}
+-assumenosideeffects class java.io.PrintStream {
+    public void println(...);
+}
+
+# --- تشويش أقوى ----------------------------------------------------------
+# ضمّ كل الأصناف في حزمة جذر واحدة ⇒ بنية الحزم لا تكشف شيئاً.
+-repackageclasses ''
+-allowaccessmodification
+-overloadaggressively
+
+# --- عدم إفشال البناء على مراجع اختيارية غائبة ---------------------------
+-dontwarn javax.annotation.**
+-dontwarn javax.lang.model.element.**
+-dontwarn org.jetbrains.annotations.**
+-dontwarn kotlin.Metadata
+-dontwarn kotlin.jvm.internal.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn com.google.j2objc.annotations.**
+-dontwarn org.jspecify.annotations.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**
+-dontwarn sun.misc.**
+

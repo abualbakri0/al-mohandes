@@ -28,14 +28,34 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
     load();
   }, [load]);
 
-  const handleApprove = async (id: string) => {
+  /**
+   * كل صفوف الرقم الواحد تُعتمد معاً.
+   *
+   * السبب (مقيس على القاعدة الحيّة): شاشة الدخول تقرأ صفّاً **واحداً** للرقم —
+   * الأقدم — بينما هذه القائمة تُظهر الأحدث أولاً. فإن سجّل الطالب مرتين (نقرة
+   * مزدوجة، أو إعادة محاولة بعد فشل) صار للرقم صفّان، وكان اعتماد الصفّ الظاهر
+   * لا يحرّك شاشة الدخول ⇒ «بانتظار الموافقة» إلى الأبد رغم الاعتماد.
+   * الاعتماد الآن يشمل الرقم كله، فيتحرّر الطالب فوراً حتى قبل تنفيذ الهجرة
+   * 20261024120000 (وبعدها تصبح العملية تكراراً آمناً: changed = 0).
+   */
+  const handleApprove = async (reg: Registration) => {
+    const targets = registrations.filter((r) => r.phone === reg.phone && !r.is_approved);
+    if (targets.length === 0) return;
     try {
-      await approveRegistration(id);
-      setRegistrations((prev) => prev.map((r) => r.id === id ? { ...r, is_approved: true } : r));
+      for (const target of targets) {
+        await approveRegistration(target.id);
+      }
+      const ids = new Set(targets.map((r) => r.id));
+      setRegistrations((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, is_approved: true } : r)));
+      if (targets.length > 1) {
+        showToast('تم الاعتماد', `اعتُمد الرقم ${reg.phone} بصفوفه كلها (${targets.length}).`, 'success');
+      }
     } catch (err) {
       // كان الخطأ يُبتلع هنا، فيبدو الزر كأنه «لا يفعل شيئاً». المعالجة الأكثر
       // شيوعاً: صلاحية UPDATE ناقصة (42501) — تشرحها الرسالة للمطوّر.
       showToast('تعذّر اعتماد المسجّل', describeWriteError(err, 'لم يتم الاعتماد. حاول مرة أخرى.'), 'error');
+      // بعض الصفوف قد تكون اعتُمدت قبل الخطأ — نعيد القراءة من الخادم.
+      load();
     }
   };
 
@@ -54,13 +74,38 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
     }
   };
 
-  const handleDelete = async (id: string) => {
+  /**
+   * حذف المسجّل يحذف **كل صفوف رقمه** + كلمة مروره + مفاتيح جلسته.
+   *
+   * في النسخة القديمة من `delete_registration` (قبل 20261024120000) كان الحذف
+   * لصفّ واحد فقط، فبقي صفّ آخر للرقم يحمل كلمة المرور ⇒ إعادة التسجيل ترتدّ
+   * بـ`current_required`. الحذف الآن شامل، وهو ما تفعله الهجرة على الخادم أيضاً.
+   */
+  const handleDelete = async (reg: Registration) => {
+    const targets = registrations.filter((r) => r.phone === reg.phone);
+    if (targets.length === 0) return;
+    if (
+      targets.length > 1 &&
+      !window.confirm(
+        `الرقم ${reg.phone} له ${targets.length} صفوف مسجّلة.\nسيُحذف الرقم بكل صفوفه وكلمة مروره. متابعة؟`,
+      )
+    ) {
+      return;
+    }
     try {
-      await deleteRegistration(id);
-      setRegistrations((prev) => prev.filter((r) => r.id !== id));
+      for (const target of targets) {
+        await deleteRegistration(target.id);
+      }
+      const ids = new Set(targets.map((r) => r.id));
+      setRegistrations((prev) => prev.filter((r) => !ids.has(r.id)));
+      if (targets.length > 1) {
+        showToast('تم الحذف', `حُذف الرقم ${reg.phone} بصفوفه كلها (${targets.length}).`, 'success');
+      }
     } catch (err) {
       // نفس السبب المحتمل: DELETE غير ممنوح للدور (42501) قبل أن تصل RLS.
       showToast('تعذّر حذف المسجّل', describeWriteError(err, 'لم يتم الحذف. حاول مرة أخرى.'), 'error');
+      // بعض الصفوف قد تكون حُذفت قبل الخطأ — نعيد القراءة من الخادم.
+      load();
     }
   };
 
@@ -169,7 +214,7 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
                       <div className="flex items-center gap-1">
                         {!reg.is_approved && (
                           <button
-                            onClick={() => handleApprove(reg.id)}
+                            onClick={() => handleApprove(reg)}
                             className="p-2 rounded-lg text-green-500 hover:bg-green-50 transition-all"
                             title="موافقة"
                           >
@@ -187,7 +232,7 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
                           </button>
                         )}
                         <button
-                          onClick={() => handleDelete(reg.id)}
+                          onClick={() => handleDelete(reg)}
                           className="p-2 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-all"
                           title="حذف"
                         >

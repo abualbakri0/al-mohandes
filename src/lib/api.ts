@@ -483,7 +483,13 @@ export async function checkRegistration(phone: string): Promise<Registration | n
   if (!rpc.error) {
     const rows = (rpc.data ?? []) as unknown as Registration[];
     if (rows.length === 0) return null;
-    return withPasswordStatus(rows[0], phone);
+    // الأرقام المكرّرة (قبل هجرة 20261024120000) قد تعيد أكثر من صف؛ نفضّل
+    // الصف المعتمد حتى لا يبقى الطالب عالقاً على «بانتظار الموافقة» رغم
+    // اعتماد المطوّر لصفّ آخر من نفس الرقم (المعتمد أولاً ثم الأقدم).
+    const best =
+      rows.find((r) => r.is_approved) ??
+      [...rows].sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))[0];
+    return withPasswordStatus(best, phone);
   }
   // Backend migration not applied yet → legacy read.
   if (!isMissingRpc(rpc.error)) throw rpc.error;
@@ -550,6 +556,31 @@ export async function verifyPassword(phone: string, password: string, storedHash
     }
   }
   return false;
+}
+
+/**
+ * هل أوقف الخادم محاولات الدخول لهذا الرقم مؤقتاً؟
+ *
+ * `verify_password` يعيد `false` في حالتين لا تُميّزهما الواجهة: كلمة مرور
+ * خاطئة، أو تجاوز الحدّ (10 محاولات لكل رقم في 10 دقائق — auth_throttle).
+ * فكان المستخدم الجديد يقرأ «كلمة المرور غير صحيحة» وهو يُدخل الصحيحة، ويظن
+ * أن حسابه الجديد معطوب. هذه القراءة تفصل الحالتين.
+ *
+ * Fail-safe: أي خطأ (أو RPC غير منشورة) ⇒ غير موقوف، فلا تُحبس الواجهة أبداً.
+ */
+export async function isLoginBlocked(
+  phone: string
+): Promise<{ blocked: boolean; retryAfterMinutes: number }> {
+  try {
+    const { data, error } = await supabase.rpc('password_login_blocked', { p_phone: phone });
+    if (error) return { blocked: false, retryAfterMinutes: 0 };
+    const row = data as { blocked?: boolean; retry_after_seconds?: number } | null;
+    if (!row?.blocked) return { blocked: false, retryAfterMinutes: 0 };
+    const seconds = Number(row.retry_after_seconds ?? 0);
+    return { blocked: true, retryAfterMinutes: Math.max(1, Math.ceil(seconds / 60)) };
+  } catch {
+    return { blocked: false, retryAfterMinutes: 0 };
+  }
 }
 
 /**

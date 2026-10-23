@@ -115,7 +115,10 @@ export function parsePostponement(title: string, message: string): ParsedPostpon
     const subjMatch = clean.match(/(?:محاضرة|مادة|تأجيل)\s+([^يوم]{2,40}?)(?:\s*(?:يوم|الساعة|\d{1,2}:|$))/);
     if (subjMatch) subject = subjMatch[1].replace(/^(تم|تأجيل|محاضرة|مادة|في|إلى|الى)\s+/g, '').trim();
     if (!subject || subject.length < 2) {
-      const t = normArabic(title).replace(/[🚨🔔]/g, '').replace(/(تأجيل|تم تأجيل|محاضرة|مادة)/g, '').trim();
+      // The `u` flag is required so the emoji (surrogate pairs) are treated as
+      // single code points — without it ESLint reports a misleading character
+      // class and each surrogate is stripped separately.
+      const t = normArabic(title).replace(/[🚨🔔]/gu, '').replace(/(تأجيل|تم تأجيل|محاضرة|مادة)/g, '').trim();
       if (t.length >= 2 && t.length <= 40) subject = t;
     }
     if (!subject || subject.length < 2) return null;

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { KeyRound, Loader2, CheckCircle2, Lock, ShieldCheck, User as UserIcon, Phone } from 'lucide-react';
 import { changeOwnPassword } from '@/lib/api';
+import PushStatusCard from '@/components/PushStatusCard';
 import type { Registration } from '@/lib/supabase';
 
 export default function UserSettingsView({ user }: { user: Registration }) {
@@ -72,6 +73,10 @@ export default function UserSettingsView({ user }: { user: Registration }) {
           <span className="font-medium text-slate-700 dark:text-slate-200" dir="ltr">{user.phone}</span>
         </div>
       </div>
+
+      {/* حالة الإشعارات: يمنع «لا تصلني إشعارات» بلا سبب معروف */}
+      <PushStatusCard />
+
       <form onSubmit={handleChange} className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <div className="flex items-center gap-2 mb-2">
           <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-950/50 flex items-center justify-center">

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Settings, Loader2, Save, KeyRound, GraduationCap, Calendar, CheckCircle2 } from 'lucide-react';
 import { ACADEMIC_LEVELS, SEMESTERS, type AppSettings } from '@/lib/supabase';
 import { changeDevCode, fetchSettings, updateSettings } from '@/lib/api';
+import PushStatusCard from '@/components/PushStatusCard';
 
 export default function SettingsView() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -117,6 +118,9 @@ export default function SettingsView() {
           تم حفظ التغييرات بنجاح
         </div>
       )}
+
+      {/* حالة إشعارات هذا الجهاز (مطوّر): يكشف «لا يصلني إشعار تسجيل جديد» */}
+      <PushStatusCard isDeveloper />
 
       {/* Academic Level & Semester */}
         <div className="bg-white dark:bg-slate-950 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">

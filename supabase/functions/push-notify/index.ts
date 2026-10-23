@@ -470,6 +470,82 @@ function jsonRes(payload: unknown, status = 200): Response {
   });
 }
 
+// ---------- N1: سرّ الويبهوك من Vault (لا من متغيّر بيئة) ----------
+// قبل هذا التعديل كان الفحص كاملاً داخل `if (webhookSecret)` ⇒ إذا لم يكن
+// WEBHOOK_SECRET مضبوطاً (وهو غير مضبوط على المشروع) فلا فحص إطلاقاً:
+// أي شخص يملك المفتاح العام (مضمَّن في التطبيق) يرسل إشعاراً لكل الأجهزة.
+// الآن المصدر هو public.push_webhook_secret() (service_role فقط)، وغياب
+// السرّ ⇒ رفض 503 (fail-closed) بدل السماح.
+const SECRET_CACHE_MS = 60_000;
+let secretCache: { value: string; at: number } | null = null;
+
+async function loadWebhookSecret(url: string, key: string): Promise<string> {
+  const now = Date.now();
+  if (secretCache && now - secretCache.at < SECRET_CACHE_MS) return secretCache.value;
+
+  try {
+    const admin = createClient(url, key);
+    const { data, error } = await admin.rpc('push_webhook_secret');
+    const value = typeof data === 'string' ? data.trim() : '';
+    if (!error && value.length > 0) {
+      secretCache = { value, at: now };
+      return value;
+    }
+    if (error && error.code !== 'PGRST202') {
+      console.error('[push-notify] push_webhook_secret() failed:', error.code, error.message);
+    }
+  } catch (e) {
+    console.error('[push-notify] push_webhook_secret() threw:', String(e));
+  }
+
+  // احتياط مؤقت أثناء الانتقال فقط: متغيّر البيئة إن كان مضبوطاً.
+  // (بعد تدوير السرّ يُترك فارغاً، فتكون القاعدة هي المصدر الوحيد.)
+  const fromEnv = (Deno.env.get('WEBHOOK_SECRET') ?? '').trim();
+  if (fromEnv.length > 0) {
+    secretCache = { value: fromEnv, at: now };
+    return fromEnv;
+  }
+  return '';
+}
+
+// مقارنة بزمن ثابت: `!==` تكشف عدد الخانات الصحيحة عبر فروق التوقيت،
+// وهو ما يسمح بتخمين السرّ خانة بخانة.
+function constantTimeEqual(a: string, b: string): boolean {
+  const ab = textEncoder.encode(a);
+  const bb = textEncoder.encode(b);
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i += 1) {
+    diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
+}
+
+// حدّ معدّل بسيط في الذاكرة لحماية مسار التسجيل من إغراق الجدول بصفوف وهمية.
+// (أفضل جهد: الذاكرة لكل نسخة من الدالة — كافٍ لوقف الإغراق العادي.)
+const RATE: Map<string, { n: number; reset: number }> = new Map();
+
+function clientIp(req: Request): string {
+  const realIp = req.headers.get('x-real-ip');
+  if (realIp) return realIp.trim();
+  const xff = req.headers.get('x-forwarded-for') ?? '';
+  const last = xff.split(',').pop()?.trim();
+  return last && last.length > 0 ? last : 'unknown';
+}
+
+function rateLimited(bucket: string, limit: number, windowMs = 60_000): boolean {
+  const now = Date.now();
+  const entry = RATE.get(bucket);
+  if (!entry || entry.reset <= now) {
+    if (RATE.size > 5_000) RATE.clear();
+    RATE.set(bucket, { n: 1, reset: now + windowMs });
+    return false;
+  }
+  entry.n += 1;
+  return entry.n > limit;
+}
+
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -478,9 +554,9 @@ serve(async (req: Request) => {
     return new Response('Method not allowed', { status: 405, headers: CORS_HEADERS });
   }
 
-  // ملاحظة: فحص السر المشترك (WEBHOOK_SECRET) تم نقله إلى ما بعد معالجة
-  // طلبات تسجيل الجهاز (register/unregister) — لأن تلك الطلبات تأتي من
-  // التطبيق بمفتاح anon ولا تحمل السر. انظر أدناه.
+  // ملاحظة: فحص السر المشترك تم نقله إلى ما بعد معالجة طلبات تسجيل الجهاز
+  // (register/unregister) — لأن تلك الطلبات تأتي من التطبيق بمفتاح anon ولا
+  // تحمل السر. انظر أسفل: الفحص إلزامي (fail-closed) لكل ما عدا التسجيل.
 
   let body: {
     type?: string;
@@ -498,6 +574,9 @@ serve(async (req: Request) => {
     auth?: string;
     platform?: string;
     is_developer?: boolean;
+    // توكين المطوّر الموقّع (نفس x-dev-token). العميل لا يُصدَّق في
+    // is_developer إطلاقاً؛ يُمرَّر التوكين إلى القاعدة وهي التي تقرّر.
+    dev_token?: string;
     alerts_enabled?: boolean;
   };
   try {
@@ -520,8 +599,30 @@ serve(async (req: Request) => {
       return jsonRes({ error: 'missing service credentials' }, 500);
     }
     const kind = body.kind === 'web' ? 'web' : 'fcm';
-    const supabase = createClient(supabaseUrl, serviceKey);
     const isUnregister = body.type === 'unregister';
+
+    // إغراق الجدول بصفوف وهمية كان ممكناً من أي جهاز (بلا سرّ ولا حساب).
+    // حدود سخية جداً: لا تُلمس الاستخدامات الطبيعية إطلاقاً. وإن تعذّر تحديد
+    // عنوان الطالب (لا هيدرات وكيل) نتخطّى الحدّ بدل حجب الجميع عند مفتاح واحد.
+    const ip = clientIp(req);
+    const limited =
+      ip !== 'unknown' &&
+      (isUnregister ? rateLimited(`unreg:${ip}`, 120) : rateLimited(`reg:${ip}`, 60));
+    if (limited) {
+      console.warn(`[register] rate limited ${isUnregister ? 'unregister' : 'register'} from ${ip}`);
+      return jsonRes({ error: 'too many requests' }, 429);
+    }
+
+    // N2: لا نصدّق body.is_developer. نمرّر توكين المطوّر (إن وُجد) في
+    // هيدر x-dev-token، ومشغّل push_guard_dev_flag في القاعدة يسقط الادعاء
+    // إن لم يكن التوكين صالحاً — فيبقى قرار الصفة في الخادم وحده.
+    const devToken = (body.dev_token ?? '').trim().slice(0, 512);
+    const devClaimed = devToken.length > 0;
+    const supabase = createClient(
+      supabaseUrl,
+      serviceKey,
+      devClaimed ? { global: { headers: { 'x-dev-token': devToken } } } : undefined,
+    );
 
     if (kind === 'fcm') {
       const token = (body.token ?? '').trim();
@@ -541,7 +642,7 @@ serve(async (req: Request) => {
           token,
           platform: body.platform ?? 'android',
           department: body.department ?? null,
-          is_developer: body.is_developer === true,
+          is_developer: devClaimed,
           alerts_enabled: body.alerts_enabled !== false,
           last_seen_at: new Date().toISOString(),
         },
@@ -579,7 +680,7 @@ serve(async (req: Request) => {
         p256dh,
         auth: authKey,
         department: body.department ?? null,
-        is_developer: body.is_developer === true,
+        is_developer: devClaimed,
         alerts_enabled: body.alerts_enabled !== false,
         last_seen_at: new Date().toISOString(),
       },
@@ -592,21 +693,32 @@ serve(async (req: Request) => {
     return jsonRes({ ok: true, kind: 'web' });
   }
 
-  // ---------- فحص السر المشترك (لطلبات المشغّل/الويب هوك) ----------
+  // ---------- فحص السر المشترك (طلبات المشغّل/الويب هوك) ----------
   // مشغّل قاعدة البيانات يرسل دائماً:
   //   Authorization: Bearer <anon key>   (لعبور بوابة الدوال)
-  //   x-webhook-secret: <WEBHOOK_SECRET>
+  //   x-webhook-secret: <سرّ Vault>
   // لذلك يجب فحص x-webhook-secret أولاً، وإلا صار كل استدعاء من المشغّل 401
   // بسبب مقارنة مفتاح الـ anon بالسر المشترك.
-  const webhookSecret = Deno.env.get('WEBHOOK_SECRET');
-  if (webhookSecret) {
-    const headerSecret = req.headers.get('x-webhook-secret');
-    const auth = req.headers.get('authorization') ?? '';
-    const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
-    const provided = headerSecret ?? bearer;
-    if (provided !== webhookSecret) {
-      return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
-    }
+  //
+  // غياب السرّ = رفض (fail-closed). سابقاً كان الفحص داخل `if (secret)`
+  // فكان المسار مفتوحاً بالكامل عند عدم ضبط المتغيّر — وهذا ما حدث فعلياً.
+  if (!supabaseUrl || !serviceKey) {
+    return jsonRes({ error: 'missing service credentials' }, 500);
+  }
+  const webhookSecret = await loadWebhookSecret(supabaseUrl, serviceKey);
+  if (!webhookSecret) {
+    console.error(
+      '[push-notify] رفض الطلب: لا سرّ ويبهوك متاح. نفّذ migration 20261024090000 ثم أعد نشر هذه الدالة.',
+    );
+    return jsonRes({ error: 'webhook secret not configured' }, 503);
+  }
+  const headerSecret = (req.headers.get('x-webhook-secret') ?? '').trim();
+  const auth = req.headers.get('authorization') ?? '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
+  const provided = headerSecret.length > 0 ? headerSecret : bearer;
+  if (!constantTimeEqual(provided, webhookSecret)) {
+    console.warn('[push-notify] 401: x-webhook-secret غير مطابق');
+    return jsonRes({ error: 'unauthorized' }, 401);
   }
 
   const serviceAccountRaw = Deno.env.get('FIREBASE_SERVICE_ACCOUNT');

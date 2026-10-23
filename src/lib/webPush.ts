@@ -13,6 +13,7 @@
 import { Capacitor } from '@capacitor/core';
 import { supabase, type Department } from '@/lib/supabase';
 import { getNotificationPrefs } from '@/lib/notificationPrefs';
+import { getDevToken } from '@/lib/devAuth';
 
 // VAPID public key (scripts/gen-vapid-keys.mjs output). The matching private
 // key lives ONLY in the Supabase Edge Function secret — never in the bundle.
@@ -139,7 +140,8 @@ async function uploadWebSubscription(): Promise<void> {
           p256dh: json.keys.p256dh,
           auth: json.keys.auth,
           department: webDepartment,
-          is_developer: webIsDeveloper,
+          // N2: التوكين وحده يُرسل؛ القاعدة تسقط الادعاء إن لم يكن صالحاً.
+          dev_token: getDevToken() ?? undefined,
           alerts_enabled: alertsEnabled,
         },
       });

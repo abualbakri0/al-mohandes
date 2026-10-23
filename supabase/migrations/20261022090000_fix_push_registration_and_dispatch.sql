@@ -345,10 +345,12 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'push_webhook_secret') THEN
+    -- لا سرّ مكتوب في الكود إطلاقاً: يُولَّد عشوائياً ويبقى داخل Vault وحده،
+    -- وتقرأه الدالة عبر public.push_webhook_secret() بصلاحية service_role.
     PERFORM vault.create_secret(
-      'mohanndes-push-webhook-2026',
+      encode(extensions.gen_random_bytes(32), 'hex'),
       'push_webhook_secret',
-      'سر مشترك اختياري مع push-notify'
+      'سر ويبهوك عشوائي لـ push-notify'
     );
   END IF;
 END $$;
@@ -440,7 +442,9 @@ GRANT EXECUTE ON FUNCTION public.push_diag() TO anon, authenticated;
 --      FIREBASE_SERVICE_ACCOUNT        = JSON مفتاح حساب الخدمة (وليس google-services.json)
 --      WEBPUSH_VAPID_PRIVATE_KEY       = المفتاح الخاص VAPID بصيغة PKCS8 base64
 --                                        (ناتج scripts/gen-vapid-keys.mjs — تم تدويره)
---      WEBHOOK_SECRET                  = mohanndes-push-webhook-2026   (اختياري)
+--      WEBHOOK_SECRET                  = (مهجور — السرّ الآن من Vault عبر
+--                                         public.push_webhook_secret؛ لا تضبطه
+--                                         ولا تكتب قيمته في الكود)
 --    للتحقق أن المفتاح الخاص يطابق العام المُعلن، أرسل أي طلب للدالة
 --    وانظر في الرد: "vapidKeyMatchesPublic": true  (يجب أن تكون true)
 --

@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
+import { viteObfuscator } from './build/vite-plugin-obfuscator';
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -18,9 +19,26 @@ export default defineConfig(({ mode }) => {
     );
   }
 
+  // ---------------------------------------------------------------------
+  // تشويش الحزمة (Anti-reverse-engineering) — مفعّل افتراضياً في الإنتاج.
+  //   OBFUSCATE=0        ⇒ بناء عادي (للتشخيص فقط)
+  //   OBFUSCATE_CFF=1    ⇒ + control-flow flattening (أقوى، أبطأ، أعلى خطورة)
+  //   OBFUSCATE_STRICT=0 ⇒ فشل التشويش يصبح تحذيراً بدل إفشال البناء
+  // ---------------------------------------------------------------------
+  const obfuscate = mode === 'production' && process.env.OBFUSCATE !== '0';
+
   return {
     base: './',
-    plugins: [react()],
+    plugins: [
+      react(),
+      viteObfuscator({
+        enabled: obfuscate,
+        controlFlowFlattening: process.env.OBFUSCATE_CFF === '1',
+        // eval-based: لا يُفعَّل على الويب (CSP: script-src 'self' بلا unsafe-eval).
+        selfDefending: process.env.OBFUSCATE_SELFDEF === '1',
+        strict: process.env.OBFUSCATE_STRICT !== '0',
+      }),
+    ],
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -33,12 +51,13 @@ export default defineConfig(({ mode }) => {
     // original source of the app to anyone who downloads the bundle).
     build: {
       sourcemap: false,
-      // Max JS obfuscation via the existing bundler: full minification,
-      // no legal comments, no beautification — unreadable in F12.
+      // Minify first (fast, removes whitespace/names), then the obfuscator
+      // plugin above runs as the LAST step and encrypts the string table.
       minify: 'esbuild',
       cssMinify: true,
       reportCompressedSize: false,
-      chunkSizeWarningLimit: 600,
+      // التشويش يكبّر الحزمة (~×2.2) — الحد مُرفَع لتفادي تحذير مضلّل.
+      chunkSizeWarningLimit: 1600,
     },
     // Security: strip console.* and `debugger` from production bundles so
     // diagnostics/error details can't be read by anyone inspecting the app.

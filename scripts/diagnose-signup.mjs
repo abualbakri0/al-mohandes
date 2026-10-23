@@ -27,7 +27,14 @@ const line = (label, status, body) => console.log(`${String(status).padEnd(4)}${
 
 const rpc = async (fn, args) => {
   const r = await fetch(`${URL_}/rest/v1/rpc/${fn}`, { method: 'POST', headers, body: JSON.stringify(args) });
-  return { status: r.status, body: await r.text() };
+  const text = await r.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* non-JSON body (error page) */
+  }
+  return { status: r.status, body: text, json };
 };
 
 console.log(`backend: ${URL_}   test phone: ${PHONE}\n`);
@@ -39,6 +46,21 @@ line('rpc/registration_by_phone', ...Object.values(await rpc('registration_by_ph
 const reg = await rpc('register_student', { p_name: 'DIAG TEST', p_phone: PHONE, p_department: 'كهرباء' });
 line('rpc/register_student', reg.status, reg.body);
 
+// step 1b — SAME phone again: from migration 20261024120000 this must return the
+// SAME row id (one row per phone). Before it, it created a second row — and the
+// login screen read the OLDEST one, so approving the newest never unlocked it.
+const reg2 = await rpc('register_student', { p_name: 'DIAG TEST 2', p_phone: PHONE, p_department: 'كهرباء' });
+line('rpc/register_student (same phone again)', reg2.status, reg2.body);
+{
+  const id1 = Array.isArray(reg.json) ? reg.json[0]?.id : null;
+  const id2 = Array.isArray(reg2.json) ? reg2.json[0]?.id : null;
+  console.log(
+    `     ⇒ ${id1 && id1 === id2
+      ? 'IDEMPOTENT ✅ (one row per phone)'
+      : 'DUPLICATE ⚠️  (a second row was created — run 20261024120000_fix_new_user_login.sql)'}`
+  );
+}
+
 // step 2 — set_password (called right after; 4 args like the client)
 const set = await rpc('set_password', { p_phone: PHONE, p_password: PASS, p_must_change: false, p_current: null });
 line('rpc/set_password {4 args}', set.status, set.body);
@@ -49,6 +71,10 @@ line('rpc/set_password {3 args}', set3.status, set3.body);
 
 // step 3 — password_status (what the login screen reads)
 line('rpc/password_status', ...Object.values(await rpc('password_status', { p_phone: PHONE })));
+
+// step 3b — login throttle state (added by 20261024120000): lets the gate say
+// "attempts paused" instead of a misleading "wrong password".
+line('rpc/password_login_blocked', ...Object.values(await rpc('password_login_blocked', { p_phone: PHONE })));
 
 // step 4 — verify_password (hash round-trip must be true)
 line('rpc/verify_password (correct → true)', ...Object.values(await rpc('verify_password', { p_phone: PHONE, p_password: PASS })));

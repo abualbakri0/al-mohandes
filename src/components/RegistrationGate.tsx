@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { GraduationCap, UserPlus, Loader2, Phone, User as UserIcon, CalendarDays, BookOpen, Bell, Cpu, Zap, KeyRound, Shield, Clock, RefreshCw, ArrowRight, Lock, Eye, EyeOff, HelpCircle, WifiOff } from 'lucide-react';
-import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, openProgressSession, describeRegistrationError, type Registration } from '@/lib/api';
+import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, openProgressSession, describeRegistrationError, isLoginBlocked, type Registration } from '@/lib/api';
 import { fetchSettings } from '@/lib/api';
 import type { AppSettings } from '@/lib/supabase';
 import { useToast } from '@/components/ToastProvider';
@@ -15,6 +15,37 @@ const DEPARTMENTS: { id: Department; label: string; icon: typeof Cpu; color: str
   { id: 'ميكاترونكس', label: 'هندسة الميكاترونكس', icon: Cpu, color: 'from-cyan-500 to-blue-600' },
   { id: 'كهربائية', label: 'هندسة كهرباء', icon: Zap, color: 'from-amber-500 to-orange-600' },
 ];
+
+/** رسالة موحّدة لرقم غير صالح — تُستخدم في كل شاشات البوابة. */
+const PHONE_ERROR = 'رقم الهاتف يجب أن يكون يمنياً ويتكون من 9 أرقام تبدأ بـ 7 (مثال: 77xxxxxxx)';
+
+/**
+ * توحيد الرقم إلى الصيغة المخزّنة في القاعدة: 9 أرقام تبدأ بـ 7.
+ *
+ * المسجّل الجديد قد يكتب رقمه بصيغة دولية (+967…) أو يبدأه بصفر (077…)، أو
+ * يفصل بين أجزائه بمسافات/شرطات، أو — وهو الأكثر شيوعاً على لوحات المفاتيح
+ * العربية — يكتبه بأرقام عربية (٧٧٩…). كل هذه الصيغ كانت تفشل في التحقق
+ * فتُظهر «رقم الهاتف يجب أن يكون يمنياً» لرقم يمني صحيح، فيتوقف الطالب عند
+ * أول خطوة في الشاشة. هنا نُعيده دائماً إلى 9 أرقام.
+ */
+function normalizePhone(raw: string): string {
+  const ascii = raw
+    // أرقام عربية-هندية ٠١٢٣٤٥٦٧٨٩ وفارسية ۰۱۲۳۴۵۶۷۸۹ → ASCII
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+  let digits = ascii.replace(/\D/g, '');
+  // مقدمة الدولة: 00967 أو 967
+  if (digits.startsWith('00967')) digits = digits.slice(5);
+  else if (digits.startsWith('967') && digits.length > 9) digits = digits.slice(3);
+  // صفر بادئ (077…)
+  if (digits.startsWith('0') && digits.length > 9) digits = digits.slice(1);
+  return digits;
+}
+
+/** هل الرقم (بعد التوحيد) صالح كرقم يمني؟ */
+function isValidPhone(digits: string): boolean {
+  return /^7\d{8}$/.test(digits);
+}
 
 type GateState = 'login' | 'register' | 'pending' | 'setPassword';
 
@@ -88,7 +119,7 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
   // ready-made reset-request message (incl. the phone they typed, if any), so
   // the user only has to hit Send inside WhatsApp.
   const handleForgotPassword = async () => {
-    const phoneDigits = phone.replace(/\D/g, '');
+    const phoneDigits = normalizePhone(phone);
     const message =
       'السلام عليكم، نسيت كلمة المرور في تطبيق "المهندس"' +
       (phoneDigits.length > 0 ? `، ورقم هاتفي: ${phoneDigits}` : '') +
@@ -108,10 +139,21 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
   // No password yet / reset by developer → force create password. Pending → pending.
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    // منع الإرسال المزدوج (نقرة/Enter متكررة) — كل نداء يفتح جلسة تقدّم
+    // ويكتب على الخادم، والتكرار كان أحد أسباب الصفوف/المحاولات المكرّرة.
+    if (loading) return;
 
-    const phoneDigits = phone.replace(/\D/g, '');
-    if (!phoneDigits.startsWith('7') || phoneDigits.length !== 9) {
-      setError('رقم الهاتف يجب أن يكون يمنياً ويتكون من 9 أرقام تبدأ بـ 7 ');
+    const phoneDigits = normalizePhone(phone);
+    if (!isValidPhone(phoneDigits)) {
+      setError(PHONE_ERROR);
+      return;
+    }
+
+    // لا شيء في هذه الشاشة يعمل بدون شبكة (فحص الرقم + التحقق من كلمة المرور)،
+    // لذا نُظهر التحذير الأحمر فوراً — قبل التحقق من رمز المطور، وإلا ظهر
+    // «رمز المطور غير صحيح» بسبب فشل الشبكة لا بسبب خطأ في الرمز.
+    if (isOffline()) {
+      notifyOffline();
       return;
     }
 
@@ -137,10 +179,6 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
     setLoading(true);
     setError(null);
     try {
-      if (isOffline()) {
-        notifyOffline();
-        return;
-      }
       const existing = await checkRegistration(phoneDigits);
       if (!existing) {
         setError('لا يوجد حساب بهذا الرقم. سجّل حساباً جديداً أولاً.');
@@ -162,22 +200,38 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
         return;
       }
 
-      // Password feature is active — a password is now required.
-      if (!password) {
-        setError('الرجاء إدخال كلمة المرور');
-        return;
-      }
-
-      // No password yet, or the developer reset it → force creating one now.
+      // لا كلمة مرور بعد (حساب قديم اعتُمد، أو أعاد المطوّر تعيينها) ⇒ شاشة
+      // «أنشئ كلمة مرور» مباشرة. كان هذا الفحص بعد طلب كلمة المرور، فيُطالب
+      // الطالب الجديد بكتابة كلمة لا يملكها قبل أن تُعرض له شاشة إنشائها.
       if (!existing.password_hash || existing.must_change_password) {
         setActiveUser(existing);
         setGateState('setPassword');
         return;
       }
 
+      // Password feature is active — a password is now required.
+      if (!password) {
+        setError('الرجاء إدخال كلمة المرور');
+        return;
+      }
+
       const ok = await verifyPassword(phoneDigits, password, existing.password_hash);
       if (!ok) {
-        setError('كلمة المرور غير صحيحة');
+        // انقطاع الشبكة داخل verify_password يُعيد false أيضاً (fail-closed)،
+        // فلا نُلصق بالطالب «كلمة المرور غير صحيحة» بسبب الشبكة.
+        if (isOffline()) {
+          notifyOffline();
+          return;
+        }
+        // فرق حاسم: verify_password تعيد false أيضاً عند تجاوز حدّ المحاولات
+        // (10 محاولات/10 دقائق). بلا هذا الفحص كان الطالب يقرأ «كلمة المرور
+        // غير صحيحة» وهو يُدخل الصحيحة، فيظن أن حسابه الجديد معطوب.
+        const blocked = await isLoginBlocked(phoneDigits);
+        setError(
+          blocked.blocked
+            ? `تم إيقاف محاولات الدخول مؤقتاً بعد 10 محاولات خاطئة. انتظر ${blocked.retryAfterMinutes} دقيقة ثم حاول مجدداً، أو اطلب من المطوّر إعادة تعيين كلمة المرور.`
+            : 'كلمة المرور غير صحيحة',
+        );
         return;
       }
 
@@ -201,6 +255,16 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
   // Step 2: Full registration with name + department (first time only)
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    // منع الإرسال المزدوج: نقرة ثانية أثناء الكتابة على الخادم كانت تُنشئ
+    // طلباً/صفّاً إضافياً لنفس الرقم (مصدر تكرار الحسابات في لوحة المطوّر).
+    if (loading) return;
+
+    // التسجيل يحتاج اتصالاً حقيقياً بالخادم (الإدارة تعتمد الطلب من هناك)،
+    // فنُظهر التحذير الأحمر قبل أي نداء شبكي — بما فيه التحقق من رمز المطور.
+    if (isOffline()) {
+      notifyOffline();
+      return;
+    }
 
     const nameParts = name.trim().split(/\s+/);
     if (nameParts.length < 4) {
@@ -208,9 +272,9 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       return;
     }
 
-    const phoneDigits = phone.replace(/\D/g, '');
-    if (!phoneDigits.startsWith('7') || phoneDigits.length !== 9) {
-      setError('رقم الهاتف يجب أن يكون يمنياً ويتكون من 9 أرقام تبدأ بـ 7 ');
+    const phoneDigits = normalizePhone(phone);
+    if (!isValidPhone(phoneDigits)) {
+      setError(PHONE_ERROR);
       return;
     }
 
@@ -247,20 +311,15 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       }
     }
 
-    // لا يمكن إتمام التسجيل بدون إنترنت (الطلب يحتاج مراجعة الإدارة على السيرفر)،
-    // لذا نُنبه المسجل الجديد فوراً بإشعار أحمر شفاف بدل محاولة فاشلة.
-    if (isOffline()) {
-      notifyOffline();
-      return;
-    }
-
     setLoading(true);
     setError(null);
     try {
       const reg = await addRegistration(name.trim(), phoneDigits, department, password);
       // Password was stored above → mint the progress key too (non-fatal).
       await openProgressSession(phoneDigits, password);
-      if (isDev) {
+      // `reg.is_approved` = طالب عائد كان حسابه معتمداً لكن بلا كلمة مرور:
+      // بعد كتابتها الآن نُدخله مباشرة بدل حجزه على شاشة «بانتظار الموافقة».
+      if (isDev || reg.is_approved) {
         localStorage.setItem('univ_user', JSON.stringify(reg));
         onRegistered(reg);
       } else {
@@ -288,6 +347,8 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
   const handleSetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeUser) return;
+    // منع الإرسال المزدوج أثناء كتابة كلمة المرور على الخادم.
+    if (loading) return;
 
     if (password.length < 4) {
       setError('كلمة المرور يجب أن تكون 4 أحرف على الأقل');
@@ -298,13 +359,14 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       return;
     }
 
+    if (isOffline()) {
+      notifyOffline();
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      if (isOffline()) {
-        notifyOffline();
-        return;
-      }
       await setUserPassword(activeUser.id, activeUser.phone, password);
       // Password now exists server-side → mint the progress key too (non-fatal).
       await openProgressSession(activeUser.phone, password);
@@ -323,24 +385,32 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
   };
 
   const handleCheckStatus = async () => {
-    const phoneDigits = phone.replace(/\D/g, '');
-    if (!phoneDigits) return;
+    if (loading) return;
+    const phoneDigits = normalizePhone(phone);
+    if (!isValidPhone(phoneDigits)) {
+      setError(PHONE_ERROR);
+      return;
+    }
+    if (isOffline()) {
+      notifyOffline();
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      if (isOffline()) {
-        notifyOffline();
-        return;
-      }
       const reg = await checkRegistration(phoneDigits);
       if (!reg) {
         setError('لم يتم العثور على تسجيل بهذا الرقم. سجّل أولاً.');
       } else if (reg.is_approved) {
         // Approved: send back to the login screen so the user enters their
         // password (or creates one if they never had it).
+        // ملاحظة للمستخدم: بدون هذا الإشعار يبدو الانتقال إلى شاشة الدخول كأنه
+        // لم يفعل شيئاً؛ الإشعار يقول صراحةً إن الحساب اعتُمد وأن المطلوب الآن
+        // كتابة كلمة المرور.
         setPassword('');
         setConfirmPassword('');
         setGateState('login');
+        showToast('تم اعتماد حسابك', 'أدخل رقم هاتفك وكلمة المرور للدخول.', 'success');
       } else {
         setPendingName(reg.name);
         setGateState('pending');
@@ -382,16 +452,22 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
               </div>
               <div>
                 <p className="font-bold text-slate-800 dark:text-slate-100">حالة طلبك: قيد المراجعة</p>
-                <p className="text-sm text-slate-600 dark:text-slate-300">عند موافقة المطور، يمكنك الدخول باستخدام رقم هاتفك.</p>
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  عند موافقة المطور ستتمكن من الدخول برقم هاتفك وكلمة المرور التي أنشأتها عند التسجيل.
+                </p>
               </div>
             </div>
 
             <div className="text-right space-y-2">
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">رقم الهاتف اليمني (إلزامي)</label>
+                <label htmlFor="pending-phone" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">رقم الهاتف المسجّل (إلزامي)</label>
               <div className="relative">
                 <Phone className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <input
+                  id="pending-phone"
                   type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  maxLength={16}
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="رقم هاتفك"
@@ -400,7 +476,11 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
                 />
               </div>
               {error && (
-                <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in">
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in"
+                >
                   {error}
                 </div>
               )}
@@ -452,11 +532,13 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
           <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl rounded-3xl p-8 shadow-2xl animate-scale-in">
             <form onSubmit={handleSetPassword} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">كلمة المرور الجديدة</label>
+                <label htmlFor="set-password" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">كلمة المرور الجديدة</label>
                 <div className="relative">
                   <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
+                    id="set-password"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="4 أحرف على الأقل"
@@ -466,19 +548,25 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
                     className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  ستدخل بها في المرات القادمة، لذا احفظها في مكان آمن.
+                </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">تأكيد كلمة المرور</label>
+                <label htmlFor="set-password-confirm" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">تأكيد كلمة المرور</label>
                 <div className="relative">
                   <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
+                    id="set-password-confirm"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="أعد كتابة كلمة المرور"
@@ -488,7 +576,11 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
               </div>
 
               {error && (
-                <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in">
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in"
+                >
                   {error}
                 </div>
               )}
@@ -577,11 +669,15 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
             /* Step 1: Phone-only login */
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">الاسم الرباعي (إلزامي)</label>
+                <label htmlFor="login-phone" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">رقم الهاتف (إلزامي)</label>
                 <div className="relative">
                   <Phone className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 dark:text-slate-300" />
                   <input
+                    id="login-phone"
                     type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel"
+                    maxLength={16}
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="7XXXXXXXX"
@@ -590,29 +686,37 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
                     autoFocus
                   />
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">9 أرقام تبدأ بـ 7 (شبكات اليمن)</p>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+                  9 أرقام تبدأ بـ 7 — يمكنك لصقه بصيغته الدولية (+967 أو 00967)
+                </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">كلمة المرور</label>
+                <label htmlFor="login-password" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">كلمة المرور</label>
                 <div className="relative">
                   <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 dark:text-slate-300" />
                   <input
+                    id="login-password"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="كلمة المرور"
+                    placeholder="كلمة المرور التي أنشأتها عند التسجيل"
                     className="w-full pr-11 pl-11 py-3 rounded-xl border border-slate-200 bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
                     dir="ltr"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white"
+                    aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+                  إن كان حسابك بلا كلمة مرور بعد، اتركها فارغة واضغط متابعة لإنشائها
+                </p>
               </div>
 
               <div className="flex items-center justify-between">
@@ -655,7 +759,11 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
               )}
 
               {error && (
-                <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in">
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in"
+                >
                   {error}
                 </div>
               )}
@@ -693,14 +801,16 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
             /* Step 2: Full registration (first time only) */
             <form onSubmit={handleRegister} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">الاسم الرباعي (إلزامي)</label>
+                <label htmlFor="reg-name" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">الاسم الرباعي (إلزامي)</label>
                 <div className="relative">
                   <UserIcon className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
+                    id="reg-name"
                     type="text"
+                    autoComplete="name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder=""
+                    placeholder="مثال: محمد أحمد علي الحيدري"
                     className="w-full pr-11 pl-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all"
                     autoFocus
                   />
@@ -709,11 +819,15 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">رقم الهاتف اليمني (إلزامي)</label>
+                <label htmlFor="reg-phone" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">رقم الهاتف اليمني (إلزامي)</label>
                 <div className="relative">
                   <Phone className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
+                    id="reg-phone"
                     type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel"
+                    maxLength={16}
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="7XXXXXXXX"
@@ -721,15 +835,19 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
                     dir="ltr"
                   />
                 </div>
-                <p className="text-xs text-slate-400 mt-1">9 أرقام تبدأ بـ 7 (شبكات اليمن)</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  9 أرقام تبدأ بـ 7 (شبكات اليمن) — الصيغة الدولية (+967) مقبولة أيضاً
+                </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">كلمة المرور</label>
+                <label htmlFor="reg-password" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">كلمة المرور</label>
                 <div className="relative">
                   <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 dark:text-slate-300" />
                   <input
+                    id="reg-password"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="4 أحرف على الأقل"
@@ -739,6 +857,7 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
                     className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
@@ -747,11 +866,13 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">تأكيد كلمة المرور</label>
+                <label htmlFor="reg-password-confirm" className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1.5">تأكيد كلمة المرور</label>
                 <div className="relative">
                   <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 dark:text-slate-300" />
                   <input
+                    id="reg-password-confirm"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="أعد كتابة كلمة المرور"
@@ -821,7 +942,11 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
               </div>
 
               {error && (
-                <div className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in">
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className="bg-red-50 text-red-600 text-sm rounded-lg px-4 py-2.5 animate-fade-in"
+                >
                   {error}
                 </div>
               )}
