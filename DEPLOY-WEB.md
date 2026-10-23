@@ -1,5 +1,12 @@
 # نشر الويب على Vercel من GitHub
 
+**الحالة: منفَّذ ومُختبَر (2026-10-23).** المشروع `al-mohandes-app-2026` مربوط
+بالمستودع `abualbakri0/al-mohandes` (Production Branch `main`)، ومتغيّرا البيئة
+`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` مضبوطان (Production + Preview).
+اختبار آلي: `push` إلى `main` أنتج نشراً `Ready` وحوّل النطاق، والحزمة المخدومة أصبحت
+`assets/index-Dm6GTvo_.js` (589,927 بايت، SHA-256 يبدأ بـ`99BABAFC…`) = مخرج `dist`
+المحلي بايت ببايت. ما يلي هو المرجع لو احتجت إعادة الربط من جديد.
+
 الهدف: أن يبني Vercel الموقع **من المستودع** عند كل `push` إلى `main`، بدل رفع حزمة مبنية يدوياً.
 السبب: النشر الحالي قديم (`assets/index-7ZDyTk2W.js`) ولا يحتوي إصلاحي الدخول
 (`registration_by_phone` / `register_student`)، فيفشل تسجيل الدخول من المتصفح برسالة
