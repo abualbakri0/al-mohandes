@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { UserPlus, Loader2, CheckCircle2, Phone, User as UserIcon, WifiOff } from 'lucide-react';
-import { addRegistration, type Registration } from '@/lib/api';
+import { addRegistration, describeRegistrationError, OFFLINE_WRITE_MESSAGE, type Registration } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 
 export default function RegistrationForm({ onRegistered }: { onRegistered: (r: Registration) => void }) {
@@ -38,14 +38,11 @@ export default function RegistrationForm({ onRegistered }: { onRegistered: (r: R
       onRegistered(reg);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String((err as { message?: string })?.message ?? '');
-      if (/fetch|network|failed to fetch|timeout|abort/i.test(msg)) {
-        const message = 'أنت غير متصل بالإنترنت — تأكد من اتصالك ثم حاول مرة أخرى.';
+      const message = describeRegistrationError(err);
+      if (message === OFFLINE_WRITE_MESSAGE) {
         showToast('لا يوجد اتصال بالإنترنت', message, 'error', WifiOff);
-        setError(message);
-      } else {
-        setError('حدث خطأ أثناء التسجيل. حاول مرة أخرى.');
       }
+      setError(message);
     } finally {
       setLoading(false);
     }

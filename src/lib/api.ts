@@ -273,6 +273,64 @@ function isMissingRpc(error: unknown): boolean {
   const msg = (e.message ?? '').toLowerCase();
   return msg.includes('could not find the function') || msg.includes('does not exist');
 }
+/**
+ * User-facing wording for a failed write.
+ *
+ * Why this exists: every screen used to collapse all non-network failures into
+ * one generic sentence, which hid two very different situations that need
+ * different actions from the student:
+ *   • 42501 / "permission denied" → the OPEN COPY of the app is old. Builds from
+ *     before migration 20261023011000 still do `INSERT ... RETURNING`, and
+ *     RETURNING needs SELECT (now revoked). A row is not even written; the only
+ *     cure is reloading/updating the client.
+ *   • duplicate / current_required → the phone already has a password, i.e. a
+ *     returning student, not a new sign-up.
+ */
+export const OFFLINE_WRITE_MESSAGE = 'أنت غير متصل بالإنترنت — تأكد من اتصالك ثم حاول مرة أخرى.';
+
+export const STALE_CLIENT_MESSAGE =
+  'هذه النسخة من التطبيق قديمة ولم تعد تملك صلاحية الكتابة. حدّث الصفحة (Ctrl+Shift+R) أو ثبّت أحدث نسخة من التطبيق ثم أعد المحاولة.';
+
+export const EXISTING_ACCOUNT_MESSAGE =
+  'هذا الرقم مسجّل مسبقاً بكلمة مرور. سجّل الدخول، أو اطلب من المطوّر إعادة تعيين كلمة المرور.';
+
+type WriteErrorFacts = { offline: boolean; stale: boolean; duplicate: boolean };
+
+function writeErrorFacts(err: unknown): WriteErrorFacts {
+  const e = (err ?? null) as { code?: string; message?: string; reason?: string } | null;
+  const code = e?.code ?? '';
+  const msg = (e?.message ?? '').toLowerCase();
+  const reason = e?.reason ?? '';
+  return {
+    offline: /fetch|network|failed to fetch|timeout|abort/i.test(msg),
+    stale:
+      code === '42501' ||
+      msg.includes('permission denied') ||
+      msg.includes('row-level security') ||
+      msg.includes('policy') ||
+      msg.includes('jwt'),
+    duplicate: code === '23505' || msg.includes('duplicate key') || reason === 'current_required',
+  };
+}
+
+/** Generic write failure → actionable Arabic sentence (developer panels). */
+export function describeWriteError(err: unknown, fallback = 'حدث خطأ غير متوقع. حاول مرة أخرى.'): string {
+  const facts = writeErrorFacts(err);
+  if (facts.offline) return OFFLINE_WRITE_MESSAGE;
+  if (facts.stale) return STALE_CLIENT_MESSAGE;
+  return fallback;
+}
+
+/** Registration failure → the message the sign-up screen shows. */
+export function describeRegistrationError(err: unknown): string {
+  const facts = writeErrorFacts(err);
+  if (facts.offline) return OFFLINE_WRITE_MESSAGE;
+  if (facts.duplicate) return EXISTING_ACCOUNT_MESSAGE;
+  if (facts.stale) return STALE_CLIENT_MESSAGE;
+  return 'حدث خطأ أثناء التسجيل. حاول مرة أخرى.';
+}
+
+
 
 export async function fetchRegistrations(): Promise<Registration[]> {
   // Privacy: `registrations` is no longer readable with the public key
@@ -329,6 +387,20 @@ async function insertRegistration(name: string, phone: string, department?: stri
 }
 
 export async function addRegistration(name: string, phone: string, department?: string, password?: string): Promise<Registration> {
+  // A phone that already holds a password belongs to a RETURNING student: the
+  // password write below would be refused server-side (current_required) *after*
+  // the pending row was already inserted, leaving a phantom registration and the
+  // generic "حدث خطأ أثناء التسجيل" message. Detect it first so the screen can
+  // tell the student to sign in instead.
+  if (password) {
+    const status = await fetchPasswordStatus(phone).catch(() => null);
+    if (status?.hasPassword) {
+      const err = new Error('phone_already_has_password') as Error & { reason?: string };
+      err.reason = 'current_required';
+      throw err;
+    }
+  }
+
   // The registrations table has no password columns; passwords live in the
   // dedicated user_passwords table (below).
   const data = await insertRegistration(name, phone, department);
@@ -338,7 +410,13 @@ export async function addRegistration(name: string, phone: string, department?: 
   // the legacy client-side write only while the RPC is not deployed yet.
   if (password) {
     const res = await setPasswordViaRpcOrLegacy(phone, password, false);
-    if (!res.ok) throw new Error('تعذّر حفظ كلمة المرور');
+    if (!res.ok) {
+      // Keep the Postgres reason so the screen can distinguish "returning
+      // student" from "stale client" (see describeRegistrationError).
+      const err = new Error('password_write_failed') as Error & { reason?: string };
+      err.reason = res.reason;
+      throw err;
+    }
   }
   return data;
 }

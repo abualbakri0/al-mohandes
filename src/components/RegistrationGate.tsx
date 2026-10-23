@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { GraduationCap, UserPlus, Loader2, Phone, User as UserIcon, CalendarDays, BookOpen, Bell, Cpu, Zap, KeyRound, Shield, Clock, RefreshCw, ArrowRight, Lock, Eye, EyeOff, HelpCircle, WifiOff } from 'lucide-react';
-import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, openProgressSession, type Registration } from '@/lib/api';
+import { addRegistration, checkRegistration, verifyPassword, setUserPassword, verifyDeveloperCode, openProgressSession, describeRegistrationError, type Registration } from '@/lib/api';
 import { fetchSettings } from '@/lib/api';
 import type { AppSettings } from '@/lib/supabase';
 import { useToast } from '@/components/ToastProvider';
@@ -274,7 +274,8 @@ export default function RegistrationGate({ onRegistered }: { onRegistered: (r: R
       if (isOffline() || /fetch|network|failed to fetch|timeout|abort/i.test(msg)) {
         notifyOffline();
       } else {
-        setError('حدث خطأ أثناء التسجيل. حاول مرة أخرى.');
+        // رسالة محدّدة بدل النص العام: نسخة قديمة (42501) أو رقم مسجّل مسبقاً.
+        setError(describeRegistrationError(err));
       }
     } finally {
       setLoading(false);

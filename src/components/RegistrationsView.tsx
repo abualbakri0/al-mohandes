@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Users, Trash2, Loader2, User as UserIcon, Phone, Search, Cpu, Zap, CheckCircle2, Clock, KeyRound } from 'lucide-react';
 import { displayDepartment, type Registration } from '@/lib/supabase';
-import { fetchRegistrations, deleteRegistration, approveRegistration, resetUserPassword } from '@/lib/api';
+import { fetchRegistrations, deleteRegistration, approveRegistration, resetUserPassword, describeWriteError } from '@/lib/api';
 import { fetchWithCache } from '@/lib/offlineStore';
+import { useToast } from '@/components/ToastProvider';
 
 export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolean }) {
+  const { showToast } = useToast();
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -30,8 +32,10 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
     try {
       await approveRegistration(id);
       setRegistrations((prev) => prev.map((r) => r.id === id ? { ...r, is_approved: true } : r));
-    } catch {
-      // ignore
+    } catch (err) {
+      // كان الخطأ يُبتلع هنا، فيبدو الزر كأنه «لا يفعل شيئاً». المعالجة الأكثر
+      // شيوعاً: صلاحية UPDATE ناقصة (42501) — تشرحها الرسالة للمطوّر.
+      showToast('تعذّر اعتماد المسجّل', describeWriteError(err, 'لم يتم الاعتماد. حاول مرة أخرى.'), 'error');
     }
   };
 
@@ -43,8 +47,8 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
     try {
       await resetUserPassword(reg.id, reg.phone);
       setRegistrations((prev) => prev.map((r) => r.id === reg.id ? { ...r, must_change_password: true } : r));
-    } catch {
-      // ignore
+    } catch (err) {
+      showToast('تعذّر إعادة تعيين كلمة المرور', describeWriteError(err, 'لم تتم إعادة التعيين. حاول مرة أخرى.'), 'error');
     } finally {
       setResettingId(null);
     }
@@ -54,8 +58,9 @@ export default function RegistrationsView({ isDeveloper }: { isDeveloper: boolea
     try {
       await deleteRegistration(id);
       setRegistrations((prev) => prev.filter((r) => r.id !== id));
-    } catch {
-      // ignore
+    } catch (err) {
+      // نفس السبب المحتمل: DELETE غير ممنوح للدور (42501) قبل أن تصل RLS.
+      showToast('تعذّر حذف المسجّل', describeWriteError(err, 'لم يتم الحذف. حاول مرة أخرى.'), 'error');
     }
   };
 
