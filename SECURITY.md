@@ -314,6 +314,12 @@ git push --force origin main
 | الحزمة المحلية `assets/index-Dm6GTvo_.js` | ✅ تحوي `registration_by_phone` + `register_student` + `unregister_push_token` |
 | الحزمة المنشورة `assets/index-7ZDyTk2W.js` | ❌ لا تحوي أياً منها ⇒ **نشر قديم** |
 
+**محدَّث (2026-10-23، بعد إعادة النشر):** الحزمة المخدومة الآن
+`assets/index-Dm6GTvo_.js` (576,153 حرفاً) = الحزمة المحلية بالضبط، وتحوي
+`registration_by_phone` + `register_student` + `unregister_push_token`.
+`node scripts/diagnose-login.mjs` ⇒ `served == local`، و`rpc/registration_by_phone` ⇒ `200`،
+و`rest/registrations` ⇒ `401 42501` (الإغلاق سليم). رأس `Content-Security-Policy` موجود.
+
 **الإصلاح:** أعد نشر `dist` (أو ثبّت APK v32 الذي يحمل الحزمة الجديدة). إعادة النشر
 لا تُعيد أي ثغرة — الحزمة الجديدة تستخدم RPC بدل القراءة المباشرة. الـ`sw.js` يعمل
 network-first لطلبات التنقّل، فتكفي إعادة تحميل واحدة بعد النشر. التشخيص المتكرِّر

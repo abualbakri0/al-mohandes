@@ -1,0 +1,37 @@
+# ما لا يُرفع إلى Vercel عند النشر من الجهاز (vercel deploy)
+# الأساس: لا أسرار، ولا ملفات ضخمة لا يحتاجها البناء.
+
+# أسرار — ممنوع رفعها (قيم البيئة تأتي من إعدادات المشروع)
+.env
+.env.*
+!.env.example
+keystore.properties
+**/keystore.properties
+*.keystore
+*.jks
+*.bks
+*.p12
+*.pfx
+google-services.json
+
+# مخرجات بناء محلية (Vercel يبنيها بنفسه)
+node_modules
+dist
+dist-ssr
+
+# أندرويد وحِزم — ليست جزءاً من بناء الويب
+android
+telegram-bot
+*.apk
+*.aab
+*.zip
+mapping-release
+mapping.txt
+
+# تقارير وتوثيق وقواعد بيانات لا يحتاجها البناء
+supabase
+scripts
+uploads
+tmp
+temp
+*.log
