@@ -319,6 +319,13 @@ git push --force origin main
 network-first لطلبات التنقّل، فتكفي إعادة تحميل واحدة بعد النشر. التشخيص المتكرِّر
 (قراءة فقط): `node scripts/diagnose-login.mjs [phone] [webUrl]`.
 
+**الإصلاح الدائم (لمنع تكرار «النشر القديم»)**: النشر كان يدوياً برفع حزمة مبنية، وهذا
+سبب بقاء الحزمة القديمة. صار المشروع جاهزاً لنشر Git: `vercel.json` يثبّت
+`framework=vite` + `npm run build` + `dist`، و`vite.config.ts` **يُفشل البناء** إن غاب
+`VITE_SUPABASE_URL` أو `VITE_SUPABASE_ANON_KEY` (بدل إنتاج bundle يشير إلى `undefined`).
+الخطوات مرة واحدة في `DEPLOY-WEB.md` (ربط المشروع الموجود `al-mohandes-app-2026`
+بالمستودع حتى يبقى النطاق نفسه). بعدها كل `push` إلى `main` ينشر تلقائياً.
+
 **التحقّق الكامل (للقراءة فقط، دور postgres):** `supabase/checks/verify_password_migrations.sql`
 — أربعة جداول: توقيعات الدوال وصلاحياتها · جاهزية bcrypt وعدد الهاشات القديمة/الجديدة
 · اختبار `password_hash_check` على صيغة SHA-256 القديمة · صلاحيات `anon` على الجداول.
